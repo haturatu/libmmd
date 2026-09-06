@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: CI / ${{ matrix.compiler }} / ${{ matrix.build_type }} / physics-${{ matrix.physics }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            compiler: GCC
+            cxx: g++
+            build_type: Debug
+            physics: ON
+            bullet: ON
+          - os: ubuntu-24.04
+            compiler: Clang
+            cxx: clang++
+            build_type: Debug
+            physics: ON
+            bullet: ON
+          - os: ubuntu-24.04
+            compiler: GCC
+            cxx: g++
+            build_type: Release
+            physics: ON
+            bullet: ON
+          - os: ubuntu-24.04
+            compiler: GCC-no-physics
+            cxx: g++
+            build_type: Debug
+            physics: OFF
+            bullet: OFF
+          - os: windows-2025
+            compiler: MSVC
+            build_type: Debug
+            physics: OFF
+            bullet: OFF
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ccache clang libbullet-dev ninja-build
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}"
+          -DCMAKE_CXX_COMPILER="${{ matrix.cxx }}"
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DLIBMMD_BUILD_TESTS=ON
+          -DLIBMMD_INSTALL=ON
+          -DLIBMMD_ENABLE_PHYSICS="${{ matrix.physics }}"
+          -DLIBMMD_ENABLE_BULLET="${{ matrix.bullet }}"
+          -DLIBMMD_WARNINGS_AS_ERRORS=ON
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DLIBMMD_BUILD_TESTS=ON
+          -DLIBMMD_INSTALL=ON
+          -DLIBMMD_ENABLE_PHYSICS=OFF
+          -DLIBMMD_ENABLE_BULLET=OFF
+          -DLIBMMD_WARNINGS_AS_ERRORS=ON
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build build --parallel
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config ${{ matrix.build_type }} --parallel
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure --parallel 2

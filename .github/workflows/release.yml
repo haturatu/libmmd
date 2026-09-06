@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Release / verify version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tag and CMake version
+        id: version
+        shell: bash
+        run: |
+          version=$(sed -nE 's/^project\(libmmd VERSION ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p' CMakeLists.txt)
+          tag_version="${GITHUB_REF_NAME#v}"
+          test -n "$version"
+          test "$tag_version" = "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: version
+    uses: ./.github/workflows/package.yml
+
+  publish:
+    name: Release / publish artifacts
+    needs: [version, ci, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ninja-build zip
+
+      - name: Build install package
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cmake -S . -B build-release -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBMMD_BUILD_TESTS=OFF \
+            -DLIBMMD_INSTALL=ON \
+            -DLIBMMD_ENABLE_PHYSICS=OFF \
+            -DLIBMMD_ENABLE_BULLET=OFF
+          cmake --build build-release --parallel
+          cmake --install build-release --prefix "staging/libmmd-${VERSION}"
+          tar -cJf "libmmd-${VERSION}-linux-x86_64.tar.xz" -C staging "libmmd-${VERSION}"
+          (cd staging && zip -qr "../libmmd-${VERSION}-linux-x86_64.zip" "libmmd-${VERSION}")
+          git archive --format=tar.gz --prefix="libmmd-${VERSION}/" -o "libmmd-${VERSION}.tar.gz" HEAD
+          git archive --format=zip --prefix="libmmd-${VERSION}/" -o "libmmd-${VERSION}.zip" HEAD
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            libmmd-${{ needs.version.outputs.version }}.tar.gz
+            libmmd-${{ needs.version.outputs.version }}.zip
+            libmmd-${{ needs.version.outputs.version }}-linux-x86_64.tar.xz
+            libmmd-${{ needs.version.outputs.version }}-linux-x86_64.zip
