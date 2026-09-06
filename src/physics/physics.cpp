@@ -1,4 +1,4 @@
-#include "core/physics.hpp"
+#include <mmd/physics.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -8,14 +8,14 @@
 #include <utility>
 #include <vector>
 
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
 #include <btBulletDynamicsCommon.h>
 #endif
 
-namespace dayo::core {
+namespace mmd {
 
 struct MmdPhysics::Impl {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     std::unique_ptr<btDefaultCollisionConfiguration> collisionConfiguration;
     std::unique_ptr<btCollisionDispatcher> dispatcher;
     std::unique_ptr<btDbvtBroadphase> broadphase;
@@ -583,4 +583,4 @@ PhysicsTransform MmdPhysics::bodyTransform(std::size_t body) const {
 #endif
 }
 
-} // namespace dayo::core
+} // namespace mmd

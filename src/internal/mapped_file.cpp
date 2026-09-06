@@ -1,4 +1,4 @@
-#include "core/mapped_file.hpp"
+#include "mapped_file.hpp"
 
 #include <fstream>
 #include <limits>
@@ -12,7 +12,7 @@
 #include <unistd.h>
 #endif
 
-namespace dayo::core {
+namespace mmd {
 
 MappedFileStream::Buffer::Buffer(const std::filesystem::path& path)
 #if defined(__linux__)
@@ -112,4 +112,4 @@ MappedFileStream::MappedFileStream(const std::filesystem::path& path) : std::ist
 
 MappedFileStream::~MappedFileStream() = default;
 
-} // namespace dayo::core
+} // namespace mmd

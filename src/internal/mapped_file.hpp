@@ -5,7 +5,7 @@
 #include <streambuf>
 #include <vector>
 
-namespace dayo::core {
+namespace mmd {
 
 class MappedFileStream final : public std::istream {
   public:
@@ -35,4 +35,4 @@ class MappedFileStream final : public std::istream {
     } buffer_;
 };
 
-} // namespace dayo::core
+} // namespace mmd

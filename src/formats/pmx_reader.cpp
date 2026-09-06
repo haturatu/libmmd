@@ -1,6 +1,6 @@
-#include "core/model_probe.hpp"
-#include "core/log.hpp"
-#include "core/mapped_file.hpp"
+#include <mmd/pmx.hpp>
+#include "log.hpp"
+#include "mapped_file.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,7 +12,7 @@
 #include <string_view>
 #include <type_traits>
 
-namespace dayo::core {
+namespace mmd {
 namespace {
 
 constexpr std::int32_t maxElements = 300'000'000;
@@ -474,12 +474,12 @@ void readSoftBodies(std::istream& input, const Header& header, PmxModel& model) 
 
 } // namespace
 
-PmxMetadata probePmx(const std::filesystem::path& path) {
+PmxMetadata pmx::probe(const std::filesystem::path& path) {
     MappedFileStream input(path);
     return readHeader(input, path).metadata;
 }
 
-PmxModel loadPmxModel(const std::filesystem::path& path) {
+PmxModel pmx::load(const std::filesystem::path& path) {
     MappedFileStream input(path);
     const auto header = readHeader(input, path);
     PmxModel model;
@@ -504,8 +504,8 @@ PmxModel loadPmxModel(const std::filesystem::path& path) {
     return model;
 }
 
-PmxMesh loadPmxMesh(const std::filesystem::path& path) {
-    auto model = loadPmxModel(path);
+PmxMesh pmx::loadMesh(const std::filesystem::path& path) {
+    auto model = load(path);
     PmxMesh mesh{.metadata = std::move(model.metadata),
                  .vertices = std::move(model.vertices),
                  .indices = std::move(model.indices)};
@@ -530,4 +530,4 @@ PmxMesh loadPmxMesh(const std::filesystem::path& path) {
     return mesh;
 }
 
-} // namespace dayo::core
+} // namespace mmd

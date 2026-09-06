@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace dayo::core {
+namespace mmd {
 
 using Float2 = std::array<float, 2>;
 using Float3 = std::array<float, 3>;
@@ -206,8 +206,17 @@ struct PmxMesh {
     std::vector<std::uint32_t> indices;
 };
 
-[[nodiscard]] PmxMetadata probePmx(const std::filesystem::path& path);
-[[nodiscard]] PmxModel loadPmxModel(const std::filesystem::path& path);
-[[nodiscard]] PmxMesh loadPmxMesh(const std::filesystem::path& path);
+struct ValidationResult {
+    std::vector<std::string> errors;
+    [[nodiscard]] bool valid() const noexcept { return errors.empty(); }
+};
 
-} // namespace dayo::core
+namespace pmx {
+[[nodiscard]] PmxMetadata probe(const std::filesystem::path& path);
+[[nodiscard]] PmxModel load(const std::filesystem::path& path);
+[[nodiscard]] PmxMesh loadMesh(const std::filesystem::path& path);
+void save(const std::filesystem::path& path, const PmxModel& model);
+[[nodiscard]] ValidationResult validate(const PmxModel& model);
+} // namespace pmx
+
+} // namespace mmd

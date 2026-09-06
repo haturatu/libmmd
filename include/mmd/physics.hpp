@@ -1,13 +1,13 @@
 #pragma once
 
-#include "core/model_probe.hpp"
+#include <mmd/pmx.hpp>
 
 #include <cstddef>
 #include <memory>
 #include <span>
 #include <vector>
 
-namespace dayo::core {
+namespace mmd {
 
 struct PhysicsTransform {
     Float3 position{};
@@ -68,4 +68,9 @@ class SoftBodySimulation {
     std::size_t bodyCount_{};
 };
 
-} // namespace dayo::core
+namespace physics {
+using World = MmdPhysics;
+using SoftBody = SoftBodySimulation;
+} // namespace physics
+
+} // namespace mmd

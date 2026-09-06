@@ -1,5 +1,5 @@
-#include "core/motion.hpp"
-#include "core/mapped_file.hpp"
+#include <mmd/vmd.hpp>
+#include "mapped_file.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace dayo::core {
+namespace mmd {
 namespace {
 
 template <typename T> T read(std::istream& input, std::string_view field) {
@@ -562,4 +562,4 @@ VmdLightKey evaluateLight(const VmdMotion& motion, float frame) {
     return result;
 }
 
-} // namespace dayo::core
+} // namespace mmd

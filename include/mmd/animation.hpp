@@ -1,14 +1,14 @@
 #pragma once
 
-#include "core/model_probe.hpp"
-#include "core/motion.hpp"
+#include <mmd/pmx.hpp>
+#include <mmd/vmd.hpp>
 
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
 #include <vector>
 
-namespace dayo::core {
+namespace mmd {
 
 class MmdPhysics;
 
@@ -78,4 +78,9 @@ class MmdAnimator {
 void normalizeForPreview(std::vector<PmxVertex>& vertices, const PreviewNormalization& normalization);
 [[nodiscard]] PreviewNormalization previewNormalization(const PmxModel& model);
 
-} // namespace dayo::core
+namespace animation {
+using Animator = MmdAnimator;
+using ModelFrame = AnimatedModelFrame;
+} // namespace animation
+
+} // namespace mmd

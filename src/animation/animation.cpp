@@ -1,6 +1,6 @@
-#include "core/animation.hpp"
-#include "core/log.hpp"
-#include "core/physics.hpp"
+#include <mmd/animation.hpp>
+#include <mmd/physics.hpp>
+#include "log.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace dayo::core {
+namespace mmd {
 namespace {
 
 using Quat = Float4;
@@ -1140,4 +1140,4 @@ void normalizeForPreview(std::vector<PmxVertex>& vertices, const PreviewNormaliz
         }
 }
 
-} // namespace dayo::core
+} // namespace mmd

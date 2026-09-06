@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/model_probe.hpp"
+#include <mmd/pmx.hpp>
 
 #include <array>
 #include <cstdint>
@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace dayo::core {
+namespace mmd {
 
 struct VmdBoneKey {
     std::string name;
@@ -139,4 +139,13 @@ void saveVmd(const std::filesystem::path& path, const VmdMotion& motion);
 [[nodiscard]] VmdLightKey evaluateLight(const VmdMotion& motion, float frame);
 [[nodiscard]] float catmullRom(float p0, float p1, float p2, float p3, float t) noexcept;
 
-} // namespace dayo::core
+namespace vmd {
+[[nodiscard]] inline VmdMotion load(const std::filesystem::path& path) { return loadVmd(path); }
+inline void save(const std::filesystem::path& path, const VmdMotion& motion) { saveVmd(path, motion); }
+} // namespace vmd
+
+namespace vpd {
+[[nodiscard]] inline VpdPose load(const std::filesystem::path& path) { return loadVpd(path); }
+} // namespace vpd
+
+} // namespace mmd
