@@ -121,6 +121,9 @@ int main() {
         const auto rigidBody = transaction.addRigidBody({.name = "body", .bone = 0});
         assert(rigidBody);
         assert(transaction.addJoint({.name = "joint", .bodyA = 0, .bodyB = 0}));
+        const auto frame = transaction.addDisplayFrame({.name = "frame"});
+        const auto softBody = transaction.addSoftBody({.name = "soft", .material = -1});
+        assert(frame && softBody);
         const auto result = transaction.commit();
         assert(result.committed);
         assert(editable.model().materials[0].indexCount == 0);
@@ -128,6 +131,8 @@ int main() {
         assert(editable.model().indices.size() == 6);
         assert(editable.resolve(unreferencedVertex) != nullptr);
         assert(editable.model().morphs[0].name == "b");
+        assert(editable.resolve(frame) != nullptr);
+        assert(editable.resolve(softBody) != nullptr);
     }
 
     std::filesystem::remove(path);
