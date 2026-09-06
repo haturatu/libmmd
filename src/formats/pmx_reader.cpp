@@ -149,9 +149,7 @@ Header readHeader(std::istream& input, const std::filesystem::path& path) {
     result.metadata.comment = readText(input, result.metadata.textEncoding);
     result.metadata.englishComment = readText(input, result.metadata.textEncoding);
     result.metadata.vertexCount = readCount(input, "vertex count", 100'000'000);
-    result.format.version = result.metadata.version;
     result.format.textEncoding = static_cast<PmxTextEncoding>(result.settings[0]);
-    result.format.additionalUvCount = result.settings[1];
     result.format.vertexIndexSize = result.settings[2];
     result.format.textureIndexSize = result.settings[3];
     result.format.materialIndexSize = result.settings[4];

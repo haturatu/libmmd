@@ -27,9 +27,7 @@ struct PmxMetadata {
 enum class PmxTextEncoding : std::uint8_t { utf16le = 0, utf8 = 1 };
 
 struct PmxFormat {
-    float version{2.0F};
     PmxTextEncoding textEncoding{PmxTextEncoding::utf8};
-    std::uint8_t additionalUvCount{};
     std::uint8_t vertexIndexSize{4};
     std::uint8_t textureIndexSize{4};
     std::uint8_t materialIndexSize{4};
@@ -282,6 +280,8 @@ struct SemanticCompareResult {
     [[nodiscard]] bool equal() const noexcept { return differences.empty(); }
 };
 
+enum class PmxComparisonProfile : std::uint8_t { logical, preservation };
+
 namespace pmx {
 [[nodiscard]] PmxMetadata probe(const std::filesystem::path& path);
 [[nodiscard]] PmxModel load(const std::filesystem::path& path);
@@ -292,8 +292,10 @@ namespace pmx {
 [[nodiscard]] std::uint8_t requiredSignedIndexWidth(std::size_t count) noexcept;
 [[nodiscard]] PmxIndexWidths chooseIndexWidths(const PmxModel& model,
                                                 PmxSaveOptions options = {}) noexcept;
-[[nodiscard]] SemanticCompareResult semanticCompare(const PmxModel& lhs, const PmxModel& rhs);
-[[nodiscard]] bool semanticEqual(const PmxModel& lhs, const PmxModel& rhs);
+[[nodiscard]] SemanticCompareResult semanticCompare(const PmxModel& lhs, const PmxModel& rhs,
+                                                     PmxComparisonProfile profile = PmxComparisonProfile::logical);
+[[nodiscard]] bool semanticEqual(const PmxModel& lhs, const PmxModel& rhs,
+                                 PmxComparisonProfile profile = PmxComparisonProfile::logical);
 [[nodiscard]] ValidationResult validate(const PmxModel& model);
 [[nodiscard]] std::filesystem::path resolveTexturePath(const PmxModel& model, std::size_t textureIndex);
 } // namespace pmx

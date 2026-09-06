@@ -1,5 +1,6 @@
 #include <mmd/pmx.hpp>
 
+#include <filesystem>
 #include <string>
 
 namespace mmd {
@@ -88,10 +89,17 @@ void collection(Comparator& c, const std::vector<T>& lhs, const std::vector<T>& 
         equal(lhs[i], rhs[i], path + "[" + std::to_string(i) + "]");
 }
 
+std::string logicalTexturePath(std::string path) {
+    std::replace(path.begin(), path.end(), '\\', '/');
+    return std::filesystem::path(path).lexically_normal().generic_string();
+}
+
 } // namespace
 
-SemanticCompareResult pmx::semanticCompare(const PmxModel& lhs, const PmxModel& rhs) {
+SemanticCompareResult pmx::semanticCompare(const PmxModel& lhs, const PmxModel& rhs,
+                                           PmxComparisonProfile profile) {
     Comparator c;
+    c.field(lhs.metadata.version, rhs.metadata.version, "metadata.version");
     c.field(lhs.metadata.modelName, rhs.metadata.modelName, "metadata.modelName");
     c.field(lhs.metadata.englishName, rhs.metadata.englishName, "metadata.englishName");
     c.field(lhs.metadata.comment, rhs.metadata.comment, "metadata.comment");
@@ -100,7 +108,10 @@ SemanticCompareResult pmx::semanticCompare(const PmxModel& lhs, const PmxModel& 
     if (lhs.metadata.additionalUvCount != rhs.metadata.additionalUvCount) return std::move(c.result);
     collection(c, lhs.vertices, rhs.vertices, "vertices", [&](const auto& a, const auto& b, const auto& p) { vertex(c, a, b, lhs.metadata.additionalUvCount, p); });
     c.field(lhs.indices, rhs.indices, "indices");
-    collection(c, lhs.textures, rhs.textures, "textures", [&](const auto& a, const auto& b, const auto& p) { c.field(a.storedPath, b.storedPath, p + ".storedPath"); });
+    collection(c, lhs.textures, rhs.textures, "textures", [&](const auto& a, const auto& b, const auto& p) {
+        if (profile == PmxComparisonProfile::preservation) c.field(a.storedPath, b.storedPath, p + ".storedPath");
+        else c.field(logicalTexturePath(a.storedPath), logicalTexturePath(b.storedPath), p + ".logicalPath");
+    });
     collection(c, lhs.materials, rhs.materials, "materials", [&](const auto& a, const auto& b, const auto& p) {
         c.field(a.name,b.name,p+".name"); c.field(a.englishName,b.englishName,p+".englishName"); c.field(a.diffuse,b.diffuse,p+".diffuse"); c.field(a.specular,b.specular,p+".specular"); c.field(a.shininess,b.shininess,p+".shininess"); c.field(a.ambient,b.ambient,p+".ambient"); c.field(a.drawFlags,b.drawFlags,p+".drawFlags"); c.field(a.edgeColor,b.edgeColor,p+".edgeColor"); c.field(a.edgeSize,b.edgeSize,p+".edgeSize"); c.field(a.textureIndex,b.textureIndex,p+".textureIndex"); c.field(a.sphereTextureIndex,b.sphereTextureIndex,p+".sphereTextureIndex"); c.field(a.sphereMode,b.sphereMode,p+".sphereMode"); c.field(a.toonMode,b.toonMode,p+".toonMode"); c.field(a.toonTextureIndex,b.toonTextureIndex,p+".toonTextureIndex"); c.field(a.memo,b.memo,p+".memo"); c.field(a.indexCount,b.indexCount,p+".indexCount");
     });
@@ -126,11 +137,20 @@ SemanticCompareResult pmx::semanticCompare(const PmxModel& lhs, const PmxModel& 
         for (std::size_t i=0;i<a.anchors.size();++i) { c.field(a.anchors[i].rigidBody,b.anchors[i].rigidBody,p+".anchors["+std::to_string(i)+"].rigidBody"); c.field(a.anchors[i].vertex,b.anchors[i].vertex,p+".anchors["+std::to_string(i)+"].vertex"); c.field(a.anchors[i].nearMode,b.anchors[i].nearMode,p+".anchors["+std::to_string(i)+"].nearMode"); }
         c.field(a.pinnedVertices,b.pinnedVertices,p+".pinnedVertices");
     });
+    if (profile == PmxComparisonProfile::preservation) {
+        c.field(lhs.format.textEncoding, rhs.format.textEncoding, "format.textEncoding");
+        c.field(lhs.format.vertexIndexSize, rhs.format.vertexIndexSize, "format.vertexIndexSize");
+        c.field(lhs.format.textureIndexSize, rhs.format.textureIndexSize, "format.textureIndexSize");
+        c.field(lhs.format.materialIndexSize, rhs.format.materialIndexSize, "format.materialIndexSize");
+        c.field(lhs.format.boneIndexSize, rhs.format.boneIndexSize, "format.boneIndexSize");
+        c.field(lhs.format.morphIndexSize, rhs.format.morphIndexSize, "format.morphIndexSize");
+        c.field(lhs.format.rigidBodyIndexSize, rhs.format.rigidBodyIndexSize, "format.rigidBodyIndexSize");
+    }
     return std::move(c.result);
 }
 
-bool pmx::semanticEqual(const PmxModel& lhs, const PmxModel& rhs) {
-    return semanticCompare(lhs, rhs).equal();
+bool pmx::semanticEqual(const PmxModel& lhs, const PmxModel& rhs, PmxComparisonProfile profile) {
+    return semanticCompare(lhs, rhs, profile).equal();
 }
 
 } // namespace mmd

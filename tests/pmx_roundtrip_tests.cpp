@@ -47,6 +47,10 @@ int main() {
     const auto widenedModel = mmd::pmx::load(preservedPath);
     assert(widenedModel.format.boneIndexSize == 2);
     assert(mmd::pmx::semanticEqual(formatted, widenedModel));
+    formatted.format.boneIndexSize = 2;
+    formatted.bones.resize(1);
+    assert(mmd::pmx::chooseIndexWidths(formatted).bone == 2);
+    assert(mmd::pmx::chooseIndexWidths(formatted, {.indexWidths = mmd::PmxIndexWidthPolicy::minimal}).bone == 1);
 
     auto semanticallyEquivalent = model;
     semanticallyEquivalent.format.boneIndexSize = 1;
@@ -57,13 +61,29 @@ int main() {
     const auto diff = mmd::pmx::semanticCompare(model, semanticallyEquivalent);
     assert(!diff.equal());
     assert(!diff.differences.empty());
+    model.textures = {{"tex\\body.png"}};
+    semanticallyEquivalent = model;
+    semanticallyEquivalent.textures[0].storedPath = "tex/body.png";
+    assert(mmd::pmx::semanticEqual(model, semanticallyEquivalent));
+    assert(!mmd::pmx::semanticEqual(model, semanticallyEquivalent, mmd::PmxComparisonProfile::preservation));
 
     mmd::PmxDocument document(model);
     const auto root = document.boneHandle(0);
     assert(document.resolve(root) != nullptr);
     assert(document.referencesTo(root).size() == 3);
+    assert(document.faces().size() == 1);
+    assert(document.referencesTo(document.vertexHandle(0)).size() == 1);
+    {
+        auto withAllMaterialMorph = model;
+        withAllMaterialMorph.morphs = {{.name = "all", .type = 8, .offsets = {{.index = -1}}}};
+        mmd::PmxDocument allMaterialDocument(std::move(withAllMaterialMorph));
+        assert(allMaterialDocument.allMaterialReferences().size() == 1);
+        assert(allMaterialDocument.allMaterialReferences()[0].targetKind == mmd::ReferenceTargetKind::all);
+    }
     {
         auto transaction = document.transaction();
+        const auto impact = transaction.analyzeErase(root);
+        assert(impact.vertexWeights == 3);
         assert(!transaction.eraseBone(root));
         const auto result = transaction.commit();
         assert(!result.committed);

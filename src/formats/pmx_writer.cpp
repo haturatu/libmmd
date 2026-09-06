@@ -234,7 +234,7 @@ PmxSaveReport pmx::save(const std::filesystem::path& path, const PmxModel& model
         throw std::runtime_error("cannot open PMX for writing: " + path.string());
 
     output.write("PMX ", 4);
-    const auto version = options.mode == PmxSaveMode::preserve ? model.format.version : model.metadata.version;
+    const auto version = model.metadata.version;
     write(output, version, "version");
     write(output, std::uint8_t{8}, "header size");
     const auto encoding = options.mode == PmxSaveMode::preserve ? static_cast<std::uint8_t>(model.format.textEncoding)
