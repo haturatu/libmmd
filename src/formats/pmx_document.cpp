@@ -231,29 +231,34 @@ ValidationResult PmxDocument::validate() const {
     ensure();
     auto result = pmx::validate(model_);
     for (auto &issue : result.issues) {
-        const auto assign = [&](const char *kind, auto handle, const char *field) {
-            issue.object = kind;
+        const auto assign = [&](ReferenceObjectKind kind, const char *name, auto handle, const char *field) {
+            issue.object = name;
+            issue.location.kind = kind;
             issue.location.id = handle.id;
             issue.location.generation = handle.generation;
             issue.location.field = field;
         };
-        if (issue.message.find("vertex") != std::string::npos && !vertices_.slots.empty())
-            assign("vertex", vertices_.at(0), "vertex");
+        if ((issue.message.find("vertex") != std::string::npos || issue.message.find("QDEF") != std::string::npos ||
+             issue.message.find("weight") != std::string::npos || issue.message.find("non-finite") != std::string::npos) &&
+            !vertices_.slots.empty())
+            assign(ReferenceObjectKind::vertex, "vertex", vertices_.at(0), "vertex");
         else if (issue.message.find("material") != std::string::npos && !materials_.slots.empty())
-            assign("material", materials_.at(0), "material");
+            assign(ReferenceObjectKind::material, "material", materials_.at(0), "material");
         else if ((issue.message.find("bone") != std::string::npos || issue.message.find("IK") != std::string::npos) &&
                  !bones_.slots.empty())
-            assign("bone", bones_.at(0), "bone");
+            assign(ReferenceObjectKind::bone, "bone", bones_.at(0), "bone");
         else if (issue.message.find("morph") != std::string::npos && !morphs_.slots.empty())
-            assign("morph", morphs_.at(0), "morph");
+            assign(ReferenceObjectKind::morph, "morph", morphs_.at(0), "morph");
         else if (issue.message.find("joint") != std::string::npos && !joints_.slots.empty())
-            assign("joint", joints_.at(0), "joint");
+            assign(ReferenceObjectKind::joint, "joint", joints_.at(0), "joint");
         else if (issue.message.find("rigid") != std::string::npos && !rigidBodies_.slots.empty())
-            assign("rigidBody", rigidBodies_.at(0), "rigidBody");
+            assign(ReferenceObjectKind::rigidBody, "rigidBody", rigidBodies_.at(0), "rigidBody");
         else if (issue.message.find("display") != std::string::npos && !displayFrames_.slots.empty())
-            assign("displayFrame", displayFrames_.at(0), "displayFrame");
-        else
+            assign(ReferenceObjectKind::displayFrame, "displayFrame", displayFrames_.at(0), "displayFrame");
+        else {
             issue.object = "model";
+            issue.location.kind = ReferenceObjectKind::model;
+        }
     }
     return result;
 }

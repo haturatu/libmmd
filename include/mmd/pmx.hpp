@@ -9,6 +9,19 @@
 
 namespace mmd {
 
+enum class ReferenceObjectKind : std::uint8_t {
+    model,
+    vertex,
+    material,
+    bone,
+    morph,
+    displayFrame,
+    rigidBody,
+    joint,
+    softBody,
+    face
+};
+
 using Float2 = std::array<float, 2>;
 using Float3 = std::array<float, 3>;
 using Float4 = std::array<float, 4>;
@@ -229,6 +242,7 @@ struct PmxMesh {
 enum class ValidationSeverity : std::uint8_t { info, warning, error, fatal };
 enum class ValidationCode : std::uint16_t { generic, invalid_format, invalid_reference, material_range, bone_cycle };
 struct ValidationLocation {
+    ReferenceObjectKind kind{ReferenceObjectKind::model};
     std::uint64_t id{};
     std::uint32_t generation{};
     std::string field;

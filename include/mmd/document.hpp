@@ -42,17 +42,6 @@ using JointHandle = PmxHandle<JointTag>;
 using SoftBodyHandle = PmxHandle<SoftBodyTag>;
 using FaceHandle = PmxHandle<FaceTag>;
 
-enum class ReferenceObjectKind : std::uint8_t {
-    vertex,
-    material,
-    bone,
-    morph,
-    displayFrame,
-    rigidBody,
-    joint,
-    softBody,
-    face
-};
 // ReferenceIndex stores actual target edges. A missing entry represents an
 // optional PMX reference with no target; `all` is the material-morph selector.
 enum class ReferenceTargetKind : std::uint8_t { object, all };
@@ -424,20 +413,26 @@ class PmxDocument::Transaction {
         return true;
     }
     [[nodiscard]] bool setBoneParent(BoneHandle child, BoneHandle parent) {
-        const auto c = bones_.index(child), p = bones_.index(parent);
-        if (!c || !p || *c == *p)
+        return setBoneParent(child, std::optional<BoneHandle>{parent});
+    }
+    [[nodiscard]] bool setBoneParent(BoneHandle child, std::optional<BoneHandle> parent) {
+        const auto c = bones_.index(child);
+        const auto p = parent ? bones_.index(*parent) : std::optional<std::size_t>{};
+        if (!c || (parent && (!p || *c == *p)))
             return false;
-        std::vector<bool> visited(model_.bones.size());
-        for (auto cursor = *p;;) {
-            if (cursor >= model_.bones.size() || visited[cursor] || cursor == *c)
-                return false;
-            visited[cursor] = true;
-            const auto next = model_.bones[cursor].parent;
-            if (next < 0)
-                break;
-            cursor = static_cast<std::size_t>(next);
+        if (parent) {
+            std::vector<bool> visited(model_.bones.size());
+            for (auto cursor = *p;;) {
+                if (cursor >= model_.bones.size() || visited[cursor] || cursor == *c)
+                    return false;
+                visited[cursor] = true;
+                const auto next = model_.bones[cursor].parent;
+                if (next < 0)
+                    break;
+                cursor = static_cast<std::size_t>(next);
+            }
         }
-        model_.bones[*c].parent = static_cast<std::int32_t>(*p);
+        model_.bones[*c].parent = p ? static_cast<std::int32_t>(*p) : -1;
         if (std::find(changes_.bones.begin(), changes_.bones.end(), child) == changes_.bones.end())
             changes_.bones.push_back(child);
         return true;
