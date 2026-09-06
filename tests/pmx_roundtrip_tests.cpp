@@ -1,5 +1,5 @@
-#include <mmd/pmx.hpp>
 #include <mmd/document.hpp>
+#include <mmd/pmx.hpp>
 
 #include <cassert>
 #include <filesystem>
