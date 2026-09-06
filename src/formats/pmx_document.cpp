@@ -122,11 +122,12 @@ PmxDocument &PmxDocument::operator=(const PmxDocument &other) {
     return *this;
 }
 
-void PmxDocument::restoreSnapshot(const PmxDocument &snapshot) {
+void PmxDocument::restoreSnapshot(const PmxDocument &snapshot, std::uint64_t targetDomain) {
     if (this == &snapshot)
         return;
     snapshot.ensure();
     model_ = snapshot.model_;
+    domain_ = targetDomain == 0 ? domain_ : targetDomain;
     vertices_ = snapshot.vertices_;
     textures_ = snapshot.textures_;
     materials_ = snapshot.materials_;
