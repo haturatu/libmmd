@@ -199,6 +199,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
         addError(result,
                  finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) && finite(vertex.weights),
                  "vertex contains non-finite values");
+        addError(result, model.metadata.version >= 2.1F || vertex.weightType != PmxWeightType::qdef,
+                 "QDEF requires PMX 2.1");
         const auto boneCount = vertex.weightType == PmxWeightType::bdef1 ? 1U
                                : vertex.weightType == PmxWeightType::bdef2 || vertex.weightType == PmxWeightType::sdef
                                    ? 2U
@@ -218,8 +220,31 @@ ValidationResult pmx::validate(const PmxModel &model) {
                 addError(result, inRange(link.bone, model.bones.size()), "IK link index is out of range");
         }
     }
+    std::vector<std::uint8_t> boneVisit(model.bones.size());
+    const auto visitBone = [&](auto &&self, std::size_t index) -> bool {
+        if (boneVisit[index] == 1)
+            return false;
+        if (boneVisit[index] == 2)
+            return true;
+        boneVisit[index] = 1;
+        const auto parent = model.bones[index].parent;
+        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() &&
+            !self(self, static_cast<std::size_t>(parent)))
+            return false;
+        boneVisit[index] = 2;
+        return true;
+    };
+    for (std::size_t index = 0; index < model.bones.size(); ++index) {
+        if (!visitBone(visitBone, index)) {
+            result.issues.push_back(
+                {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone hierarchy contains a cycle"});
+            break;
+        }
+    }
     for (const auto &morph : model.morphs) {
         addError(result, morph.type <= 10, "unknown morph type");
+        addError(result, model.metadata.version >= 2.1F || (morph.type != 9 && morph.type != 10),
+                 "flip and impulse morphs require PMX 2.1");
         for (const auto &offset : morph.offsets) {
             const auto count = morph.type == 1 || (morph.type >= 3 && morph.type <= 7) ? model.vertices.size()
                                : morph.type == 2                                       ? model.bones.size()
@@ -509,8 +534,7 @@ std::filesystem::path pmx::resolveTexturePath(const PmxModel &model, std::size_t
         throw std::out_of_range("PMX texture index is out of range");
     auto stored = model.textures[textureIndex].storedPath;
     std::replace(stored.begin(), stored.end(), '\\', '/');
-    const auto utf8 = std::u8string(reinterpret_cast<const char8_t *>(stored.data()), stored.size());
-    return (model.sourcePath.parent_path() / std::filesystem::path(utf8)).lexically_normal();
+    return (model.sourcePath.parent_path() / std::filesystem::path(stored)).lexically_normal();
 }
 
 } // namespace mmd

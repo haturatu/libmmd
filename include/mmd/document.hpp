@@ -53,7 +53,9 @@ enum class ReferenceObjectKind : std::uint8_t {
     softBody,
     face
 };
-enum class ReferenceTargetKind : std::uint8_t { object, none, all };
+// ReferenceIndex stores actual target edges. A missing entry represents an
+// optional PMX reference with no target; `all` is the material-morph selector.
+enum class ReferenceTargetKind : std::uint8_t { object, all };
 enum class ReferenceField : std::uint8_t {
     vertexBone,
     materialTexture,
@@ -74,6 +76,7 @@ enum class ReferenceField : std::uint8_t {
     softBodyAnchorVertex,
     softBodyPinnedVertex,
     faceVertex,
+    faceMaterial,
 };
 // Identifies a graph edge without storing a vector-invalidated pointer.
 struct ReferenceSite {
@@ -95,6 +98,29 @@ struct EraseImpact {
         return vertexWeights + childBones + ikLinks + morphOffsets + displayEntries + rigidBodies;
     }
 };
+struct VertexEraseImpact {
+    std::size_t faces{}, morphOffsets{}, softBodyAnchors{}, pinnedVertices{};
+    [[nodiscard]] std::size_t total() const noexcept {
+        return faces + morphOffsets + softBodyAnchors + pinnedVertices;
+    }
+};
+struct BoneDraft {
+    PmxBone value;
+    std::optional<BoneHandle> parent;
+};
+struct RigidBodyDraft {
+    PmxRigidBody value;
+    std::optional<BoneHandle> bone;
+};
+struct JointDraft {
+    PmxJoint value;
+    RigidBodyHandle bodyA;
+    RigidBodyHandle bodyB;
+};
+struct SoftBodyDraft {
+    PmxSoftBody value;
+    std::optional<MaterialHandle> material;
+};
 struct PmxTransactionResult {
     bool committed{};
     ValidationResult validation;
@@ -110,30 +136,57 @@ class PmxDocument {
     template <typename Tag> struct Table {
         std::uint64_t nextId{1};
         std::vector<Slot<Tag>> slots;
+        mutable std::unordered_map<std::uint64_t, std::size_t> indexById;
+        void rebuildIndex() const {
+            indexById.clear();
+            indexById.reserve(slots.size());
+            for (std::size_t i = 0; i < slots.size(); ++i)
+                indexById.emplace(slots[i].id, i);
+        }
         void reset(std::size_t count) {
             slots.clear();
             slots.reserve(count);
             for (std::size_t i = 0; i < count; ++i)
                 slots.push_back({nextId++, 1});
+            rebuildIndex();
         }
         [[nodiscard]] PmxHandle<Tag> at(std::size_t i) const {
             return i < slots.size() ? PmxHandle<Tag>{slots[i].id, slots[i].generation} : PmxHandle<Tag>{};
         }
         [[nodiscard]] std::optional<std::size_t> index(PmxHandle<Tag> h) const {
-            for (std::size_t i = 0; i < slots.size(); ++i)
-                if (slots[i].id == h.id && slots[i].generation == h.generation)
-                    return i;
-            return std::nullopt;
+            auto found = indexById.find(h.id);
+            if (found != indexById.end() && found->second < slots.size() && slots[found->second].id == h.id &&
+                slots[found->second].generation == h.generation)
+                return found->second;
+            if (found != indexById.end()) {
+                rebuildIndex();
+                found = indexById.find(h.id);
+            }
+            if (found == indexById.end() || slots[found->second].generation != h.generation)
+                return std::nullopt;
+            return found->second;
         }
         [[nodiscard]] PmxHandle<Tag> append() {
             slots.push_back({nextId++, 1});
+            indexById.emplace(slots.back().id, slots.size() - 1);
             return at(slots.size() - 1);
         }
         [[nodiscard]] PmxHandle<Tag> insert(std::size_t i) {
             if (i > slots.size())
                 return {};
             slots.insert(slots.begin() + static_cast<std::ptrdiff_t>(i), {nextId++, 1});
+            rebuildIndex();
             return at(i);
+        }
+        void erase(std::size_t i) {
+            slots.erase(slots.begin() + static_cast<std::ptrdiff_t>(i));
+            rebuildIndex();
+        }
+        void move(std::size_t from, std::size_t to) {
+            auto value = slots[from];
+            slots.erase(slots.begin() + static_cast<std::ptrdiff_t>(from));
+            slots.insert(slots.begin() + static_cast<std::ptrdiff_t>(to), value);
+            rebuildIndex();
         }
     };
 
@@ -183,9 +236,21 @@ class PmxDocument {
         ensure();
         return morphs_.at(i);
     }
+    [[nodiscard]] DisplayFrameHandle displayFrameHandle(std::size_t i) const {
+        ensure();
+        return displayFrames_.at(i);
+    }
     [[nodiscard]] RigidBodyHandle rigidBodyHandle(std::size_t i) const {
         ensure();
         return rigidBodies_.at(i);
+    }
+    [[nodiscard]] JointHandle jointHandle(std::size_t i) const {
+        ensure();
+        return joints_.at(i);
+    }
+    [[nodiscard]] SoftBodyHandle softBodyHandle(std::size_t i) const {
+        ensure();
+        return softBodies_.at(i);
     }
     [[nodiscard]] FaceHandle faceHandle(std::size_t i) const {
         ensure();
@@ -215,9 +280,25 @@ class PmxDocument {
         ensure();
         return resolve(model_.morphs, morphs_, h);
     }
+    [[nodiscard]] const PmxDisplayFrame *resolve(DisplayFrameHandle h) const {
+        ensure();
+        return resolve(model_.displayFrames, displayFrames_, h);
+    }
     [[nodiscard]] const PmxRigidBody *resolve(RigidBodyHandle h) const {
         ensure();
         return resolve(model_.rigidBodies, rigidBodies_, h);
+    }
+    [[nodiscard]] const PmxJoint *resolve(JointHandle h) const {
+        ensure();
+        return resolve(model_.joints, joints_, h);
+    }
+    [[nodiscard]] const PmxSoftBody *resolve(SoftBodyHandle h) const {
+        ensure();
+        return resolve(model_.softBodies, softBodies_, h);
+    }
+    [[nodiscard]] const PmxFace *resolve(FaceHandle h) const {
+        ensure();
+        return resolve(faces_, facesTable_, h);
     }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(VertexHandle h) const;
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(TextureHandle h) const {
@@ -277,7 +358,6 @@ class PmxDocument {
     void rebuildIndexes();
     void rebuildReferences();
     static void remapBoneReferences(PmxModel &model, const std::vector<std::int32_t> &map);
-    static void remapMaterialReferences(PmxModel &model, const std::vector<std::int32_t> &map);
     friend class Transaction;
 };
 
@@ -286,12 +366,32 @@ class PmxDocument::Transaction {
     explicit Transaction(PmxDocument &d) : document_(d) {
         document_.ensure();
         model_ = d.model_;
-        bones_ = d.bones_;
+        vertices_ = d.vertices_;
+        textures_ = d.textures_;
         materials_ = d.materials_;
+        bones_ = d.bones_;
+        morphs_ = d.morphs_;
+        displayFrames_ = d.displayFrames_;
+        rigidBodies_ = d.rigidBodies_;
+        joints_ = d.joints_;
+        softBodies_ = d.softBodies_;
+        facesTable_ = d.facesTable_;
+        faces_ = d.faces_;
     }
     [[nodiscard]] BoneHandle addBone(PmxBone bone) {
         return insertBone(model_.bones.size(), std::move(bone));
     }
+    [[nodiscard]] BoneHandle addBone(BoneDraft draft) {
+        draft.value.parent = -1;
+        const auto handle = addBone(std::move(draft.value));
+        if (handle && draft.parent && !setBoneParent(handle, *draft.parent)) {
+            errors_.push_back("invalid bone draft parent");
+            return {};
+        }
+        return handle;
+    }
+    // References in bone are interpreted as pre-insertion PMX indices. Prefer
+    // addBone() followed by handle-based setters for new editor code.
     [[nodiscard]] BoneHandle insertBone(std::size_t destination, PmxBone bone);
     [[nodiscard]] bool renameBone(BoneHandle h, std::string name) {
         const auto i = bones_.index(h);
@@ -302,8 +402,18 @@ class PmxDocument::Transaction {
     }
     [[nodiscard]] bool setBoneParent(BoneHandle child, BoneHandle parent) {
         const auto c = bones_.index(child), p = bones_.index(parent);
-        if (!c || !p)
+        if (!c || !p || *c == *p)
             return false;
+        std::vector<bool> visited(model_.bones.size());
+        for (auto cursor = *p;;) {
+            if (cursor >= model_.bones.size() || visited[cursor] || cursor == *c)
+                return false;
+            visited[cursor] = true;
+            const auto next = model_.bones[cursor].parent;
+            if (next < 0)
+                break;
+            cursor = static_cast<std::size_t>(next);
+        }
         model_.bones[*c].parent = static_cast<std::int32_t>(*p);
         return true;
     }
@@ -311,17 +421,94 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool eraseBone(BoneHandle h, ErasePolicy policy = ErasePolicy::rejectIfReferenced);
     [[nodiscard]] bool moveBone(BoneHandle h, std::size_t destination);
     [[nodiscard]] bool eraseMaterial(MaterialHandle h);
+    // FaceGraph owns indexCount; the supplied PmxMaterial::indexCount is ignored.
+    [[nodiscard]] MaterialHandle addMaterial(PmxMaterial material);
+    [[nodiscard]] bool moveMaterial(MaterialHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseMaterial(MaterialHandle h, std::optional<MaterialHandle> replacement);
+    [[nodiscard]] VertexHandle addVertex(PmxVertex vertex);
+    [[nodiscard]] VertexEraseImpact analyzeErase(VertexHandle h) const;
+    [[nodiscard]] bool moveVertex(VertexHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseVertex(VertexHandle h);
+    [[nodiscard]] FaceHandle addFace(VertexHandle a, VertexHandle b, VertexHandle c, MaterialHandle material);
+    [[nodiscard]] bool eraseFace(FaceHandle h);
+    [[nodiscard]] bool setFaceMaterial(FaceHandle h, MaterialHandle material);
+    [[nodiscard]] MorphHandle addMorph(PmxMorph morph);
+    [[nodiscard]] bool moveMorph(MorphHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseMorph(MorphHandle h);
+    [[nodiscard]] TextureHandle addTexture(PmxTexture texture);
+    [[nodiscard]] bool moveTexture(TextureHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseTexture(TextureHandle h);
+    [[nodiscard]] RigidBodyHandle addRigidBody(PmxRigidBody body);
+    [[nodiscard]] RigidBodyHandle addRigidBody(RigidBodyDraft draft) {
+        draft.value.bone = -1;
+        const auto handle = addRigidBody(std::move(draft.value));
+        const auto body = rigidBodies_.index(handle);
+        if (!handle || !body)
+            return {};
+        if (draft.bone) {
+            const auto bone = bones_.index(*draft.bone);
+            if (!bone) {
+                errors_.push_back("invalid rigid body draft bone");
+                return {};
+            }
+            model_.rigidBodies[*body].bone = static_cast<std::int32_t>(*bone);
+        }
+        return handle;
+    }
+    [[nodiscard]] bool moveRigidBody(RigidBodyHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseRigidBody(RigidBodyHandle h);
+    [[nodiscard]] JointHandle addJoint(PmxJoint joint);
+    [[nodiscard]] JointHandle addJoint(JointDraft draft) {
+        const auto a = rigidBodies_.index(draft.bodyA), b = rigidBodies_.index(draft.bodyB);
+        if (!a || !b) {
+            errors_.push_back("invalid joint draft body");
+            return {};
+        }
+        draft.value.bodyA = static_cast<std::int32_t>(*a);
+        draft.value.bodyB = static_cast<std::int32_t>(*b);
+        return addJoint(std::move(draft.value));
+    }
+    [[nodiscard]] bool eraseJoint(JointHandle h);
+    [[nodiscard]] DisplayFrameHandle addDisplayFrame(PmxDisplayFrame frame);
+    [[nodiscard]] bool eraseDisplayFrame(DisplayFrameHandle h);
+    [[nodiscard]] SoftBodyHandle addSoftBody(PmxSoftBody body);
+    [[nodiscard]] SoftBodyHandle addSoftBody(SoftBodyDraft draft) {
+        draft.value.material = -1;
+        if (draft.material) {
+            const auto material = materials_.index(*draft.material);
+            if (!material) {
+                errors_.push_back("invalid soft body draft material");
+                return {};
+            }
+            draft.value.material = static_cast<std::int32_t>(*material);
+        }
+        return addSoftBody(std::move(draft.value));
+    }
+    [[nodiscard]] bool eraseSoftBody(SoftBodyHandle h);
     [[nodiscard]] PmxTransactionResult commit();
 
   private:
     PmxDocument &document_;
     PmxModel model_;
-    Table<BoneTag> bones_;
+    Table<VertexTag> vertices_;
+    Table<TextureTag> textures_;
     Table<MaterialTag> materials_;
+    Table<BoneTag> bones_;
+    Table<MorphTag> morphs_;
+    Table<DisplayFrameTag> displayFrames_;
+    Table<RigidBodyTag> rigidBodies_;
+    Table<JointTag> joints_;
+    Table<SoftBodyTag> softBodies_;
+    Table<FaceTag> facesTable_;
+    std::vector<PmxFace> faces_;
     std::vector<std::string> errors_;
     bool done_{};
     [[nodiscard]] bool boneReferenced(std::size_t i) const;
     [[nodiscard]] bool materialReferenced(std::size_t i) const;
+    [[nodiscard]] bool vertexReferenced(std::size_t i) const;
+    [[nodiscard]] bool morphReferenced(std::size_t i) const;
+    [[nodiscard]] bool textureReferenced(std::size_t i) const;
+    [[nodiscard]] bool rigidBodyReferenced(std::size_t i) const;
 };
 
 inline PmxDocument::Transaction PmxDocument::transaction() {

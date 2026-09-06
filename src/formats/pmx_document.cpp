@@ -176,6 +176,13 @@ void PmxDocument::rebuildReferences() {
             addReference(refs_.rigidBodies, rigidBodies_, b.anchors[n].rigidBody, ReferenceObjectKind::softBody, h.id,
                          h.generation, ReferenceField::softBodyAnchorRigidBody, static_cast<std::uint32_t>(n));
     }
+    for (std::size_t i = 0; i < faces_.size(); ++i) {
+        const auto faceOwner = facesTable_.at(i);
+        const auto material = faces_[i].material;
+        if (material)
+            refs_.materials[material.id].push_back(
+                {ReferenceObjectKind::face, faceOwner.id, faceOwner.generation, ReferenceField::faceMaterial, 0});
+    }
 }
 
 std::vector<ReferenceSite> PmxDocument::referencesTo(VertexHandle handle) const {
@@ -217,7 +224,7 @@ std::vector<ReferenceSite> PmxDocument::referencesTo(VertexHandle handle) const 
 
 void PmxDocument::remapBoneReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
     const auto remap = [&](std::int32_t &x) {
-        if (x >= 0)
+        if (x >= 0 && static_cast<std::size_t>(x) < map.size())
             x = map[static_cast<std::size_t>(x)];
     };
     for (auto &v : model.vertices) {
@@ -251,9 +258,10 @@ void PmxDocument::remapBoneReferences(PmxModel &model, const std::vector<std::in
         remap(b.bone);
 }
 
-void PmxDocument::remapMaterialReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
+namespace {
+void remapMaterialReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
     const auto remap = [&](std::int32_t &x) {
-        if (x >= 0)
+        if (x >= 0 && static_cast<std::size_t>(x) < map.size())
             x = map[static_cast<std::size_t>(x)];
     };
     for (auto &morph : model.morphs)
@@ -263,6 +271,66 @@ void PmxDocument::remapMaterialReferences(PmxModel &model, const std::vector<std
     for (auto &body : model.softBodies)
         remap(body.material);
 }
+void remapVertexReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
+    const auto remap = [&](std::int32_t &x) {
+        if (x >= 0 && static_cast<std::size_t>(x) < map.size())
+            x = map[static_cast<std::size_t>(x)];
+    };
+    for (auto &morph : model.morphs)
+        if (morph.type == 1 || (morph.type >= 3 && morph.type <= 7))
+            for (auto &offset : morph.offsets)
+                remap(offset.index);
+    for (auto &body : model.softBodies) {
+        for (auto &anchor : body.anchors)
+            remap(anchor.vertex);
+        for (auto &vertex : body.pinnedVertices)
+            remap(vertex);
+    }
+}
+void remapMorphReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
+    const auto remap = [&](std::int32_t &x) {
+        if (x >= 0 && static_cast<std::size_t>(x) < map.size())
+            x = map[static_cast<std::size_t>(x)];
+    };
+    for (auto &morph : model.morphs)
+        if (morph.type == 0 || morph.type == 9)
+            for (auto &offset : morph.offsets)
+                remap(offset.index);
+    for (auto &frame : model.displayFrames)
+        for (auto &item : frame.items)
+            if (!item.bone)
+                remap(item.index);
+}
+void remapTextureReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
+    const auto remap = [&](std::int32_t &x) {
+        if (x >= 0 && static_cast<std::size_t>(x) < map.size())
+            x = map[static_cast<std::size_t>(x)];
+    };
+    for (auto &material : model.materials) {
+        remap(material.textureIndex);
+        remap(material.sphereTextureIndex);
+        if (material.toonMode == 0)
+            remap(material.toonTextureIndex);
+    }
+}
+void remapRigidBodyReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
+    const auto remap = [&](std::int32_t &x) {
+        if (x >= 0 && static_cast<std::size_t>(x) < map.size())
+            x = map[static_cast<std::size_t>(x)];
+    };
+    for (auto &morph : model.morphs)
+        if (morph.type == 10)
+            for (auto &offset : morph.offsets)
+                remap(offset.index);
+    for (auto &joint : model.joints) {
+        remap(joint.bodyA);
+        remap(joint.bodyB);
+    }
+    for (auto &body : model.softBodies)
+        for (auto &anchor : body.anchors)
+            remap(anchor.rigidBody);
+}
+} // namespace
 
 EraseImpact PmxDocument::Transaction::analyzeErase(BoneHandle handle) const {
     EraseImpact impact;
@@ -309,7 +377,7 @@ bool PmxDocument::Transaction::materialReferenced(std::size_t i) const {
     for (const auto &m : model_.morphs)
         if (m.type == 8)
             for (const auto &x : m.offsets)
-                if (x.index == static_cast<std::int32_t>(i) || x.index == -1)
+                if (x.index == static_cast<std::int32_t>(i))
                     return true;
     return std::any_of(model_.softBodies.begin(), model_.softBodies.end(),
                        [&](const auto &b) { return b.material == static_cast<std::int32_t>(i); });
@@ -320,10 +388,23 @@ BoneHandle PmxDocument::Transaction::insertBone(std::size_t destination, PmxBone
     std::vector<std::int32_t> map(model_.bones.size());
     for (std::size_t i = 0; i < map.size(); ++i)
         map[i] = i >= destination ? static_cast<std::int32_t>(i + 1) : static_cast<std::int32_t>(i);
-    model_.bones.insert(model_.bones.begin() + static_cast<std::ptrdiff_t>(destination), std::move(bone));
-    const auto handle = bones_.insert(destination);
     remapBoneReferences(model_, map);
-    return handle;
+    const auto remap = [&](std::int32_t &x) {
+        if (x >= 0 && static_cast<std::size_t>(x) < map.size())
+            x = map[static_cast<std::size_t>(x)];
+    };
+    remap(bone.parent);
+    if (bone.flags & 1U)
+        remap(bone.tailBone);
+    if (bone.flags & 0x0300U)
+        remap(bone.inheritParent);
+    if (bone.flags & 0x0020U) {
+        remap(bone.ikTarget);
+        for (auto &link : bone.ikLinks)
+            remap(link.bone);
+    }
+    model_.bones.insert(model_.bones.begin() + static_cast<std::ptrdiff_t>(destination), std::move(bone));
+    return bones_.insert(destination);
 }
 bool PmxDocument::Transaction::eraseBone(BoneHandle h, ErasePolicy policy) {
     const auto target = bones_.index(h);
@@ -335,7 +416,7 @@ bool PmxDocument::Transaction::eraseBone(BoneHandle h, ErasePolicy policy) {
     }
     std::vector<std::int32_t> map(model_.bones.size());
     for (std::size_t i = 0; i < map.size(); ++i)
-        map[i] = i < *target ? static_cast<std::int32_t>(i) : static_cast<std::int32_t>(i - 1);
+        map[i] = i < *target ? static_cast<std::int32_t>(i) : i == *target ? -1 : static_cast<std::int32_t>(i - 1);
     model_.bones.erase(model_.bones.begin() + static_cast<std::ptrdiff_t>(*target));
     bones_.slots.erase(bones_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     remapBoneReferences(model_, map);
@@ -363,31 +444,419 @@ bool PmxDocument::Transaction::moveBone(BoneHandle h, std::size_t destination) {
     return true;
 }
 bool PmxDocument::Transaction::eraseMaterial(MaterialHandle h) {
+    return eraseMaterial(h, {});
+}
+MaterialHandle PmxDocument::Transaction::addMaterial(PmxMaterial material) {
+    if (done_)
+        return {};
+    material.indexCount = 0;
+    model_.materials.push_back(std::move(material));
+    return materials_.append();
+}
+bool PmxDocument::Transaction::moveMaterial(MaterialHandle h, std::size_t destination) {
+    const auto source = materials_.index(h);
+    if (!source || destination >= model_.materials.size())
+        return false;
+    if (*source == destination)
+        return true;
+    std::vector<std::int32_t> map(model_.materials.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i == *source                                               ? static_cast<std::int32_t>(destination)
+                 : *source < destination && i > *source && i <= destination ? static_cast<std::int32_t>(i - 1)
+                 : destination < *source && i >= destination && i < *source ? static_cast<std::int32_t>(i + 1)
+                                                                            : static_cast<std::int32_t>(i);
+    auto value = std::move(model_.materials[*source]);
+    model_.materials.erase(model_.materials.begin() + static_cast<std::ptrdiff_t>(*source));
+    model_.materials.insert(model_.materials.begin() + static_cast<std::ptrdiff_t>(destination), std::move(value));
+    auto slot = materials_.slots[*source];
+    materials_.slots.erase(materials_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
+    materials_.slots.insert(materials_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
+    remapMaterialReferences(model_, map);
+    return true;
+}
+bool PmxDocument::Transaction::eraseMaterial(MaterialHandle h, std::optional<MaterialHandle> replacement) {
     const auto target = materials_.index(h);
     if (!target)
         return false;
+    for (const auto &face : faces_)
+        if (face.material == h && !replacement) {
+            errors_.push_back("cannot erase material with faces");
+            return false;
+        }
     if (materialReferenced(*target)) {
         errors_.push_back("cannot erase referenced material");
         return false;
     }
+    if (replacement && (!materials_.index(*replacement) || *replacement == h))
+        return false;
+    for (auto &face : faces_)
+        if (face.material == h)
+            face.material = *replacement;
     std::vector<std::int32_t> map(model_.materials.size());
     for (std::size_t i = 0; i < map.size(); ++i)
         map[i] = i < *target ? static_cast<std::int32_t>(i) : i == *target ? -1 : static_cast<std::int32_t>(i - 1);
     model_.materials.erase(model_.materials.begin() + static_cast<std::ptrdiff_t>(*target));
     materials_.slots.erase(materials_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
-    PmxDocument::remapMaterialReferences(model_, map);
+    remapMaterialReferences(model_, map);
+    return true;
+}
+VertexHandle PmxDocument::Transaction::addVertex(PmxVertex vertex) {
+    if (done_)
+        return {};
+    model_.vertices.push_back(std::move(vertex));
+    return vertices_.append();
+}
+VertexEraseImpact PmxDocument::Transaction::analyzeErase(VertexHandle handle) const {
+    VertexEraseImpact impact;
+    const auto target = vertices_.index(handle);
+    if (!target)
+        return impact;
+    for (const auto &face : faces_)
+        for (const auto &vertex : face.vertices)
+            if (vertex == handle)
+                ++impact.faces;
+    for (const auto &morph : model_.morphs)
+        if (morph.type == 1 || (morph.type >= 3 && morph.type <= 7))
+            for (const auto &offset : morph.offsets)
+                if (offset.index == static_cast<std::int32_t>(*target))
+                    ++impact.morphOffsets;
+    for (const auto &body : model_.softBodies) {
+        for (const auto &anchor : body.anchors)
+            if (anchor.vertex == static_cast<std::int32_t>(*target))
+                ++impact.softBodyAnchors;
+        for (const auto &vertex : body.pinnedVertices)
+            if (vertex == static_cast<std::int32_t>(*target))
+                ++impact.pinnedVertices;
+    }
+    return impact;
+}
+bool PmxDocument::Transaction::vertexReferenced(std::size_t index) const {
+    const auto h = vertices_.at(index);
+    if (!h)
+        return true;
+    for (const auto &face : faces_)
+        for (const auto &vertex : face.vertices)
+            if (vertex == h)
+                return true;
+    for (const auto &morph : model_.morphs)
+        if (morph.type == 1 || (morph.type >= 3 && morph.type <= 7))
+            for (const auto &offset : morph.offsets)
+                if (offset.index == static_cast<std::int32_t>(index))
+                    return true;
+    for (const auto &body : model_.softBodies) {
+        for (const auto &anchor : body.anchors)
+            if (anchor.vertex == static_cast<std::int32_t>(index))
+                return true;
+        for (const auto &vertex : body.pinnedVertices)
+            if (vertex == static_cast<std::int32_t>(index))
+                return true;
+    }
+    return false;
+}
+bool PmxDocument::Transaction::moveVertex(VertexHandle h, std::size_t destination) {
+    const auto source = vertices_.index(h);
+    if (!source || destination >= model_.vertices.size())
+        return false;
+    if (*source == destination)
+        return true;
+    std::vector<std::int32_t> map(model_.vertices.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i == *source                                               ? static_cast<std::int32_t>(destination)
+                 : *source < destination && i > *source && i <= destination ? static_cast<std::int32_t>(i - 1)
+                 : destination < *source && i >= destination && i < *source ? static_cast<std::int32_t>(i + 1)
+                                                                            : static_cast<std::int32_t>(i);
+    auto value = std::move(model_.vertices[*source]);
+    model_.vertices.erase(model_.vertices.begin() + static_cast<std::ptrdiff_t>(*source));
+    model_.vertices.insert(model_.vertices.begin() + static_cast<std::ptrdiff_t>(destination), std::move(value));
+    auto slot = vertices_.slots[*source];
+    vertices_.slots.erase(vertices_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
+    vertices_.slots.insert(vertices_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
+    remapVertexReferences(model_, map);
+    return true;
+}
+bool PmxDocument::Transaction::eraseVertex(VertexHandle h) {
+    const auto target = vertices_.index(h);
+    if (!target || vertexReferenced(*target)) {
+        errors_.push_back("cannot erase referenced vertex");
+        return false;
+    }
+    std::vector<std::int32_t> map(model_.vertices.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i < *target ? static_cast<std::int32_t>(i) : i == *target ? -1 : static_cast<std::int32_t>(i - 1);
+    model_.vertices.erase(model_.vertices.begin() + static_cast<std::ptrdiff_t>(*target));
+    vertices_.slots.erase(vertices_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    remapVertexReferences(model_, map);
+    return true;
+}
+FaceHandle PmxDocument::Transaction::addFace(VertexHandle a, VertexHandle b, VertexHandle c, MaterialHandle material) {
+    if (done_ || !vertices_.index(a) || !vertices_.index(b) || !vertices_.index(c) || !materials_.index(material))
+        return {};
+    faces_.push_back({{a, b, c}, material});
+    return facesTable_.append();
+}
+bool PmxDocument::Transaction::eraseFace(FaceHandle h) {
+    const auto index = facesTable_.index(h);
+    if (!index)
+        return false;
+    faces_.erase(faces_.begin() + static_cast<std::ptrdiff_t>(*index));
+    facesTable_.slots.erase(facesTable_.slots.begin() + static_cast<std::ptrdiff_t>(*index));
+    return true;
+}
+bool PmxDocument::Transaction::setFaceMaterial(FaceHandle h, MaterialHandle material) {
+    const auto index = facesTable_.index(h);
+    if (!index || !materials_.index(material))
+        return false;
+    faces_[*index].material = material;
+    return true;
+}
+MorphHandle PmxDocument::Transaction::addMorph(PmxMorph morph) {
+    if (done_)
+        return {};
+    model_.morphs.push_back(std::move(morph));
+    return morphs_.append();
+}
+bool PmxDocument::Transaction::morphReferenced(std::size_t index) const {
+    for (const auto &morph : model_.morphs)
+        if (morph.type == 0 || morph.type == 9)
+            for (const auto &offset : morph.offsets)
+                if (offset.index == static_cast<std::int32_t>(index))
+                    return true;
+    for (const auto &frame : model_.displayFrames)
+        for (const auto &item : frame.items)
+            if (!item.bone && item.index == static_cast<std::int32_t>(index))
+                return true;
+    return false;
+}
+bool PmxDocument::Transaction::moveMorph(MorphHandle h, std::size_t destination) {
+    const auto source = morphs_.index(h);
+    if (!source || destination >= model_.morphs.size())
+        return false;
+    if (*source == destination)
+        return true;
+    std::vector<std::int32_t> map(model_.morphs.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i == *source                                               ? static_cast<std::int32_t>(destination)
+                 : *source < destination && i > *source && i <= destination ? static_cast<std::int32_t>(i - 1)
+                 : destination < *source && i >= destination && i < *source ? static_cast<std::int32_t>(i + 1)
+                                                                            : static_cast<std::int32_t>(i);
+    auto value = std::move(model_.morphs[*source]);
+    model_.morphs.erase(model_.morphs.begin() + static_cast<std::ptrdiff_t>(*source));
+    model_.morphs.insert(model_.morphs.begin() + static_cast<std::ptrdiff_t>(destination), std::move(value));
+    auto slot = morphs_.slots[*source];
+    morphs_.slots.erase(morphs_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
+    morphs_.slots.insert(morphs_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
+    remapMorphReferences(model_, map);
+    return true;
+}
+bool PmxDocument::Transaction::eraseMorph(MorphHandle h) {
+    const auto target = morphs_.index(h);
+    if (!target || morphReferenced(*target)) {
+        errors_.push_back("cannot erase referenced morph");
+        return false;
+    }
+    std::vector<std::int32_t> map(model_.morphs.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i < *target ? static_cast<std::int32_t>(i) : i == *target ? -1 : static_cast<std::int32_t>(i - 1);
+    model_.morphs.erase(model_.morphs.begin() + static_cast<std::ptrdiff_t>(*target));
+    morphs_.slots.erase(morphs_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    remapMorphReferences(model_, map);
+    return true;
+}
+bool PmxDocument::Transaction::textureReferenced(std::size_t i) const {
+    for (const auto &material : model_.materials)
+        if (material.textureIndex == static_cast<std::int32_t>(i) ||
+            material.sphereTextureIndex == static_cast<std::int32_t>(i) ||
+            (material.toonMode == 0 && material.toonTextureIndex == static_cast<std::int32_t>(i)))
+            return true;
+    return false;
+}
+TextureHandle PmxDocument::Transaction::addTexture(PmxTexture texture) {
+    if (done_)
+        return {};
+    model_.textures.push_back(std::move(texture));
+    return textures_.append();
+}
+bool PmxDocument::Transaction::moveTexture(TextureHandle h, std::size_t destination) {
+    const auto source = textures_.index(h);
+    if (!source || destination >= model_.textures.size())
+        return false;
+    if (*source == destination)
+        return true;
+    std::vector<std::int32_t> map(model_.textures.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i == *source                                               ? static_cast<std::int32_t>(destination)
+                 : *source < destination && i > *source && i <= destination ? static_cast<std::int32_t>(i - 1)
+                 : destination < *source && i >= destination && i < *source ? static_cast<std::int32_t>(i + 1)
+                                                                            : static_cast<std::int32_t>(i);
+    auto value = std::move(model_.textures[*source]);
+    model_.textures.erase(model_.textures.begin() + static_cast<std::ptrdiff_t>(*source));
+    model_.textures.insert(model_.textures.begin() + static_cast<std::ptrdiff_t>(destination), std::move(value));
+    auto slot = textures_.slots[*source];
+    textures_.slots.erase(textures_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
+    textures_.slots.insert(textures_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
+    remapTextureReferences(model_, map);
+    return true;
+}
+bool PmxDocument::Transaction::eraseTexture(TextureHandle h) {
+    const auto target = textures_.index(h);
+    if (!target || textureReferenced(*target)) {
+        errors_.push_back("cannot erase referenced texture");
+        return false;
+    }
+    std::vector<std::int32_t> map(model_.textures.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i < *target ? static_cast<std::int32_t>(i) : i == *target ? -1 : static_cast<std::int32_t>(i - 1);
+    model_.textures.erase(model_.textures.begin() + static_cast<std::ptrdiff_t>(*target));
+    textures_.slots.erase(textures_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    remapTextureReferences(model_, map);
+    return true;
+}
+bool PmxDocument::Transaction::rigidBodyReferenced(std::size_t i) const {
+    for (const auto &morph : model_.morphs)
+        if (morph.type == 10)
+            for (const auto &offset : morph.offsets)
+                if (offset.index == static_cast<std::int32_t>(i))
+                    return true;
+    for (const auto &joint : model_.joints)
+        if (joint.bodyA == static_cast<std::int32_t>(i) || joint.bodyB == static_cast<std::int32_t>(i))
+            return true;
+    for (const auto &body : model_.softBodies)
+        for (const auto &anchor : body.anchors)
+            if (anchor.rigidBody == static_cast<std::int32_t>(i))
+                return true;
+    return false;
+}
+RigidBodyHandle PmxDocument::Transaction::addRigidBody(PmxRigidBody body) {
+    if (done_)
+        return {};
+    model_.rigidBodies.push_back(std::move(body));
+    return rigidBodies_.append();
+}
+bool PmxDocument::Transaction::moveRigidBody(RigidBodyHandle h, std::size_t destination) {
+    const auto source = rigidBodies_.index(h);
+    if (!source || destination >= model_.rigidBodies.size())
+        return false;
+    if (*source == destination)
+        return true;
+    std::vector<std::int32_t> map(model_.rigidBodies.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i == *source                                               ? static_cast<std::int32_t>(destination)
+                 : *source < destination && i > *source && i <= destination ? static_cast<std::int32_t>(i - 1)
+                 : destination < *source && i >= destination && i < *source ? static_cast<std::int32_t>(i + 1)
+                                                                            : static_cast<std::int32_t>(i);
+    auto value = std::move(model_.rigidBodies[*source]);
+    model_.rigidBodies.erase(model_.rigidBodies.begin() + static_cast<std::ptrdiff_t>(*source));
+    model_.rigidBodies.insert(model_.rigidBodies.begin() + static_cast<std::ptrdiff_t>(destination), std::move(value));
+    auto slot = rigidBodies_.slots[*source];
+    rigidBodies_.slots.erase(rigidBodies_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
+    rigidBodies_.slots.insert(rigidBodies_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
+    remapRigidBodyReferences(model_, map);
+    return true;
+}
+bool PmxDocument::Transaction::eraseRigidBody(RigidBodyHandle h) {
+    const auto target = rigidBodies_.index(h);
+    if (!target || rigidBodyReferenced(*target)) {
+        errors_.push_back("cannot erase referenced rigid body");
+        return false;
+    }
+    std::vector<std::int32_t> map(model_.rigidBodies.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i < *target ? static_cast<std::int32_t>(i) : i == *target ? -1 : static_cast<std::int32_t>(i - 1);
+    model_.rigidBodies.erase(model_.rigidBodies.begin() + static_cast<std::ptrdiff_t>(*target));
+    rigidBodies_.slots.erase(rigidBodies_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    remapRigidBodyReferences(model_, map);
+    return true;
+}
+JointHandle PmxDocument::Transaction::addJoint(PmxJoint joint) {
+    if (done_)
+        return {};
+    model_.joints.push_back(std::move(joint));
+    return joints_.append();
+}
+bool PmxDocument::Transaction::eraseJoint(JointHandle h) {
+    const auto target = joints_.index(h);
+    if (!target)
+        return false;
+    model_.joints.erase(model_.joints.begin() + static_cast<std::ptrdiff_t>(*target));
+    joints_.slots.erase(joints_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    return true;
+}
+DisplayFrameHandle PmxDocument::Transaction::addDisplayFrame(PmxDisplayFrame frame) {
+    if (done_)
+        return {};
+    model_.displayFrames.push_back(std::move(frame));
+    return displayFrames_.append();
+}
+bool PmxDocument::Transaction::eraseDisplayFrame(DisplayFrameHandle h) {
+    const auto target = displayFrames_.index(h);
+    if (!target)
+        return false;
+    model_.displayFrames.erase(model_.displayFrames.begin() + static_cast<std::ptrdiff_t>(*target));
+    displayFrames_.slots.erase(displayFrames_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    return true;
+}
+SoftBodyHandle PmxDocument::Transaction::addSoftBody(PmxSoftBody body) {
+    if (done_)
+        return {};
+    if (model_.metadata.version < 2.1F) {
+        errors_.push_back("soft bodies require PMX 2.1");
+        return {};
+    }
+    model_.softBodies.push_back(std::move(body));
+    return softBodies_.append();
+}
+bool PmxDocument::Transaction::eraseSoftBody(SoftBodyHandle h) {
+    const auto target = softBodies_.index(h);
+    if (!target)
+        return false;
+    model_.softBodies.erase(model_.softBodies.begin() + static_cast<std::ptrdiff_t>(*target));
+    softBodies_.slots.erase(softBodies_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     return true;
 }
 PmxTransactionResult PmxDocument::Transaction::commit() {
     if (done_)
         return {false, {}, {"transaction has already finished"}};
     done_ = true;
+    std::vector<std::vector<const PmxFace *>> facesByMaterial(model_.materials.size());
+    for (const auto &face : faces_) {
+        const auto material = materials_.index(face.material);
+        if (!material) {
+            errors_.push_back("face has an invalid material");
+            continue;
+        }
+        facesByMaterial[*material].push_back(&face);
+    }
+    model_.indices.clear();
+    for (std::size_t material = 0; material < model_.materials.size(); ++material) {
+        auto &current = model_.materials[material];
+        current.indexCount = 0;
+        for (const auto *face : facesByMaterial[material]) {
+            for (const auto vertex : face->vertices) {
+                const auto index = vertices_.index(vertex);
+                if (!index) {
+                    errors_.push_back("face has an invalid vertex");
+                    continue;
+                }
+                model_.indices.push_back(static_cast<std::uint32_t>(*index));
+            }
+            current.indexCount += 3;
+        }
+    }
     auto validation = pmx::validate(model_);
     if (!errors_.empty() || !validation.valid())
         return {false, std::move(validation), std::move(errors_)};
     document_.model_ = std::move(model_);
+    document_.vertices_ = std::move(vertices_);
+    document_.textures_ = std::move(textures_);
     document_.bones_ = std::move(bones_);
     document_.materials_ = std::move(materials_);
+    document_.morphs_ = std::move(morphs_);
+    document_.displayFrames_ = std::move(displayFrames_);
+    document_.rigidBodies_ = std::move(rigidBodies_);
+    document_.joints_ = std::move(joints_);
+    document_.softBodies_ = std::move(softBodies_);
+    document_.faces_ = std::move(faces_);
+    document_.facesTable_ = std::move(facesTable_);
     document_.dirty_ = false;
     document_.rebuildReferences();
     return {true, std::move(validation), {}};
