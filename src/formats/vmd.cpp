@@ -3,7 +3,8 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <charconv>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -86,10 +87,11 @@ std::string trim(std::string value) {
 }
 
 float parseFloat(std::string_view input, std::string_view field) {
-    float value{};
-    const auto begin = input.data();
-    const auto [end, error] = std::from_chars(begin, begin + input.size(), value);
-    if (error != std::errc{} || end != begin + input.size()) {
+    const std::string text(input);
+    char *end = nullptr;
+    errno = 0;
+    const float value = std::strtof(text.c_str(), &end);
+    if (end == text.c_str() || end != text.c_str() + text.size() || errno == ERANGE || !std::isfinite(value)) {
         throw std::runtime_error("invalid VPD " + std::string(field));
     }
     return value;
