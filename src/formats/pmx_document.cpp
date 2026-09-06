@@ -1,8 +1,11 @@
 #include <mmd/document.hpp>
 
+#include <atomic>
 
 namespace mmd {
 namespace {
+
+std::atomic<std::uint64_t> nextDocumentDomain{1};
 
 template <typename Tag, typename Value, typename Callback>
 bool updateValue(PmxDocument::Table<Tag> &table, std::vector<Value> &values, PmxHandle<Tag> handle, Callback &&callback) {
@@ -90,7 +93,46 @@ bool containsBoneReference(const PmxModel &model, std::size_t target) {
 
 } // namespace
 
+std::uint64_t PmxDocument::allocateDomain() noexcept {
+    auto domain = nextDocumentDomain.fetch_add(1, std::memory_order_relaxed);
+    while (domain == 0)
+        domain = nextDocumentDomain.fetch_add(1, std::memory_order_relaxed);
+    return domain;
+}
+
+PmxDocument::PmxDocument() : domain_(allocateDomain()) {
+    rebuildIndexes();
+}
+
+PmxDocument::PmxDocument(PmxModel model) : model_(std::move(model)), domain_(allocateDomain()) {
+    rebuildIndexes();
+}
+
+PmxDocument::PmxDocument(const PmxDocument &other) : model_(other.model_), domain_(allocateDomain()) {
+    rebuildIndexes();
+}
+
+PmxDocument &PmxDocument::operator=(const PmxDocument &other) {
+    if (this != &other) {
+        model_ = other.model_;
+        domain_ = allocateDomain();
+        dirty_ = false;
+        rebuildIndexes();
+    }
+    return *this;
+}
+
 void PmxDocument::rebuildIndexes() {
+    vertices_.domain = domain_;
+    textures_.domain = domain_;
+    materials_.domain = domain_;
+    bones_.domain = domain_;
+    morphs_.domain = domain_;
+    displayFrames_.domain = domain_;
+    rigidBodies_.domain = domain_;
+    joints_.domain = domain_;
+    softBodies_.domain = domain_;
+    facesTable_.domain = domain_;
     vertices_.reset(model_.vertices.size());
     textures_.reset(model_.textures.size());
     materials_.reset(model_.materials.size());
