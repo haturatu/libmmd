@@ -19,7 +19,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Verify tag and CMake version
         id: version
@@ -48,26 +48,13 @@ jobs:
       contents: write
     steps:
       - name: Checkout tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ninja-build zip
-
-      - name: Build install package
+      - name: Create source packages
         shell: bash
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          cmake -S . -B build-release -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DLIBMMD_BUILD_TESTS=OFF \
-            -DLIBMMD_INSTALL=ON \
-            -DLIBMMD_ENABLE_PHYSICS=OFF \
-            -DLIBMMD_ENABLE_BULLET=OFF
-          cmake --build build-release --parallel
-          cmake --install build-release --prefix "staging/libmmd-${VERSION}"
-          tar -cJf "libmmd-${VERSION}-linux-x86_64.tar.xz" -C staging "libmmd-${VERSION}"
-          (cd staging && zip -qr "../libmmd-${VERSION}-linux-x86_64.zip" "libmmd-${VERSION}")
           git archive --format=tar.gz --prefix="libmmd-${VERSION}/" -o "libmmd-${VERSION}.tar.gz" HEAD
           git archive --format=zip --prefix="libmmd-${VERSION}/" -o "libmmd-${VERSION}.zip" HEAD
 
@@ -79,5 +66,3 @@ jobs:
           files: |
             libmmd-${{ needs.version.outputs.version }}.tar.gz
             libmmd-${{ needs.version.outputs.version }}.zip
-            libmmd-${{ needs.version.outputs.version }}-linux-x86_64.tar.xz
-            libmmd-${{ needs.version.outputs.version }}-linux-x86_64.zip
