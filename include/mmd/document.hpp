@@ -501,6 +501,17 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setMorphPanel(MorphHandle h, std::uint8_t value);
     [[nodiscard]] bool setMorphType(MorphHandle h, std::uint8_t value);
     [[nodiscard]] bool setMorphOffset(MorphHandle h, std::size_t index, PmxMorphOffset value);
+    [[nodiscard]] bool setVertexMorphOffset(MorphHandle h, std::size_t offset, VertexHandle vertex, Float3 value);
+    [[nodiscard]] bool setBoneMorphOffset(MorphHandle h, std::size_t offset, BoneHandle bone, Float3 translation,
+                                           Float4 rotation);
+    [[nodiscard]] bool setGroupMorphOffset(MorphHandle h, std::size_t offset, MorphHandle target, float weight);
+    [[nodiscard]] bool setUvMorphOffset(MorphHandle h, std::size_t offset, VertexHandle vertex, std::uint32_t channel,
+                                         Float4 value);
+    [[nodiscard]] bool setMaterialMorphOffset(MorphHandle h, std::size_t offset, std::optional<MaterialHandle> material,
+                                               std::uint8_t operation, std::array<Float4, 8> values);
+    [[nodiscard]] bool setFlipMorphOffset(MorphHandle h, std::size_t offset, MorphHandle target, float weight);
+    [[nodiscard]] bool setImpulseMorphOffset(MorphHandle h, std::size_t offset, RigidBodyHandle body, Float3 velocity,
+                                              Float3 torque, bool local);
     [[nodiscard]] bool addMorphOffset(MorphHandle h, PmxMorphOffset value);
     [[nodiscard]] bool addVertexMorphOffset(MorphHandle h, VertexHandle vertex, Float3 value);
     [[nodiscard]] bool addBoneMorphOffset(MorphHandle h, BoneHandle bone, Float3 translation, Float4 rotation);
@@ -512,6 +523,7 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool addImpulseMorphOffset(MorphHandle h, RigidBodyHandle body, Float3 velocity, Float3 torque,
                                               bool local);
     [[nodiscard]] bool eraseMorphOffset(MorphHandle h, std::size_t index);
+    [[nodiscard]] bool moveMorphOffset(MorphHandle h, std::size_t from, std::size_t to);
     [[nodiscard]] bool moveMorph(MorphHandle h, std::size_t destination);
     [[nodiscard]] bool eraseMorph(MorphHandle h);
     [[nodiscard]] TextureHandle addTexture(PmxTexture texture);

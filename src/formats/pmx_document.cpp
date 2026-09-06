@@ -1008,6 +1008,88 @@ bool PmxDocument::Transaction::setMorphOffset(MorphHandle handle, std::size_t in
     recordHandle(changes_.morphs, handle);
     return true;
 }
+bool PmxDocument::Transaction::setVertexMorphOffset(MorphHandle handle, std::size_t offsetIndex, VertexHandle vertex,
+                                                      Float3 value) {
+    const auto morph = morphs_.index(handle);
+    const auto index = vertices_.index(vertex);
+    if (!morph || !index || model_.morphs[*morph].type != 1)
+        return false;
+    PmxMorphOffset valueData;
+    valueData.index = static_cast<std::int32_t>(*index);
+    valueData.vector3 = value;
+    return setMorphOffset(handle, offsetIndex, valueData);
+}
+bool PmxDocument::Transaction::setBoneMorphOffset(MorphHandle handle, std::size_t offsetIndex, BoneHandle bone,
+                                                    Float3 translation, Float4 rotation) {
+    const auto morph = morphs_.index(handle);
+    const auto index = bones_.index(bone);
+    if (!morph || !index || model_.morphs[*morph].type != 2)
+        return false;
+    PmxMorphOffset valueData;
+    valueData.index = static_cast<std::int32_t>(*index);
+    valueData.vector3 = translation;
+    valueData.vector4 = rotation;
+    return setMorphOffset(handle, offsetIndex, valueData);
+}
+bool PmxDocument::Transaction::setGroupMorphOffset(MorphHandle handle, std::size_t offsetIndex, MorphHandle target,
+                                                     float weight) {
+    const auto morph = morphs_.index(handle);
+    const auto index = morphs_.index(target);
+    if (!morph || !index || model_.morphs[*morph].type != 0)
+        return false;
+    PmxMorphOffset valueData;
+    valueData.index = static_cast<std::int32_t>(*index);
+    valueData.scalar = weight;
+    return setMorphOffset(handle, offsetIndex, valueData);
+}
+bool PmxDocument::Transaction::setUvMorphOffset(MorphHandle handle, std::size_t offsetIndex, VertexHandle vertex,
+                                                  std::uint32_t channel, Float4 value) {
+    const auto morph = morphs_.index(handle);
+    const auto index = vertices_.index(vertex);
+    if (!morph || !index || channel > 4 || model_.morphs[*morph].type != channel + 3U)
+        return false;
+    PmxMorphOffset valueData;
+    valueData.index = static_cast<std::int32_t>(*index);
+    valueData.vector4 = value;
+    return setMorphOffset(handle, offsetIndex, valueData);
+}
+bool PmxDocument::Transaction::setMaterialMorphOffset(MorphHandle handle, std::size_t offsetIndex,
+                                                        std::optional<MaterialHandle> material, std::uint8_t operation,
+                                                        std::array<Float4, 8> values) {
+    const auto morph = morphs_.index(handle);
+    const auto index = materialIndex(materials_, material);
+    if (!morph || index == -2 || operation > 1 || model_.morphs[*morph].type != 8)
+        return false;
+    PmxMorphOffset valueData;
+    valueData.index = index;
+    valueData.operation = operation;
+    valueData.materialVectors = values;
+    return setMorphOffset(handle, offsetIndex, valueData);
+}
+bool PmxDocument::Transaction::setFlipMorphOffset(MorphHandle handle, std::size_t offsetIndex, MorphHandle target,
+                                                   float weight) {
+    const auto morph = morphs_.index(handle);
+    const auto index = morphs_.index(target);
+    if (!morph || !index || model_.morphs[*morph].type != 9)
+        return false;
+    PmxMorphOffset valueData;
+    valueData.index = static_cast<std::int32_t>(*index);
+    valueData.scalar = weight;
+    return setMorphOffset(handle, offsetIndex, valueData);
+}
+bool PmxDocument::Transaction::setImpulseMorphOffset(MorphHandle handle, std::size_t offsetIndex,
+                                                      RigidBodyHandle body, Float3 velocity, Float3 torque, bool local) {
+    const auto morph = morphs_.index(handle);
+    const auto index = rigidBodies_.index(body);
+    if (!morph || !index || model_.morphs[*morph].type != 10)
+        return false;
+    PmxMorphOffset valueData;
+    valueData.index = static_cast<std::int32_t>(*index);
+    valueData.vector3 = velocity;
+    valueData.tertiaryVector3 = torque;
+    valueData.local = local;
+    return setMorphOffset(handle, offsetIndex, valueData);
+}
 bool PmxDocument::Transaction::addMorphOffset(MorphHandle handle, PmxMorphOffset value) {
     return updateValue(morphs_, model_.morphs, handle, [&](auto &morph) { morph.offsets.push_back(value); }) &&
            (recordHandle(changes_.morphs, handle), true);
@@ -1095,6 +1177,19 @@ bool PmxDocument::Transaction::eraseMorphOffset(MorphHandle handle, std::size_t 
     if (!morph || index >= model_.morphs[*morph].offsets.size())
         return false;
     model_.morphs[*morph].offsets.erase(model_.morphs[*morph].offsets.begin() + static_cast<std::ptrdiff_t>(index));
+    recordHandle(changes_.morphs, handle);
+    return true;
+}
+bool PmxDocument::Transaction::moveMorphOffset(MorphHandle handle, std::size_t from, std::size_t to) {
+    const auto morph = morphs_.index(handle);
+    if (!morph || from >= model_.morphs[*morph].offsets.size() || to >= model_.morphs[*morph].offsets.size())
+        return false;
+    if (from == to)
+        return true;
+    auto &offsets = model_.morphs[*morph].offsets;
+    auto value = std::move(offsets[from]);
+    offsets.erase(offsets.begin() + static_cast<std::ptrdiff_t>(from));
+    offsets.insert(offsets.begin() + static_cast<std::ptrdiff_t>(to), std::move(value));
     recordHandle(changes_.morphs, handle);
     return true;
 }
