@@ -113,6 +113,7 @@ std::uint32_t readVertexIndex(std::istream& input, std::uint8_t size) {
 
 struct Header {
     PmxMetadata metadata;
+    PmxFormat format;
     std::array<std::uint8_t, 8> settings{};
 };
 
@@ -148,6 +149,15 @@ Header readHeader(std::istream& input, const std::filesystem::path& path) {
     result.metadata.comment = readText(input, result.metadata.textEncoding);
     result.metadata.englishComment = readText(input, result.metadata.textEncoding);
     result.metadata.vertexCount = readCount(input, "vertex count", 100'000'000);
+    result.format.version = result.metadata.version;
+    result.format.textEncoding = static_cast<PmxTextEncoding>(result.settings[0]);
+    result.format.additionalUvCount = result.settings[1];
+    result.format.vertexIndexSize = result.settings[2];
+    result.format.textureIndexSize = result.settings[3];
+    result.format.materialIndexSize = result.settings[4];
+    result.format.boneIndexSize = result.settings[5];
+    result.format.morphIndexSize = result.settings[6];
+    result.format.rigidBodyIndexSize = result.settings[7];
     return result;
 }
 
@@ -201,13 +211,7 @@ void readMaterials(std::istream& input, const Header& header, PmxModel& model) {
     const auto textureCount = readCount(input, "texture count", 1'000'000);
     model.textures.reserve(static_cast<std::size_t>(textureCount));
     for (std::int32_t i = 0; i < textureCount; ++i) {
-        auto value = readText(input, header.metadata.textEncoding);
-        // PMX files authored on Windows commonly store texture paths with
-        // backslashes. Normalize them before constructing a native path so
-        // the same archive resolves correctly on Linux and other POSIX hosts.
-        std::replace(value.begin(), value.end(), '\\', '/');
-        const auto* utf8 = reinterpret_cast<const char8_t*>(value.c_str());
-        model.textures.push_back((model.sourcePath.parent_path() / std::filesystem::path(utf8)).lexically_normal());
+        model.textures.push_back({readText(input, header.metadata.textEncoding)});
     }
     const auto count = readCount(input, "material count", 1'000'000);
     model.materials.resize(static_cast<std::size_t>(count));
@@ -484,6 +488,7 @@ PmxModel pmx::load(const std::filesystem::path& path) {
     const auto header = readHeader(input, path);
     PmxModel model;
     model.metadata = header.metadata;
+    model.format = header.format;
     model.sourcePath = path;
     readVertices(input, header, model);
     const auto indexCount = readCount(input, "index count");
