@@ -227,6 +227,37 @@ void PmxDocument::rebuildReferences() {
     }
 }
 
+ValidationResult PmxDocument::validate() const {
+    ensure();
+    auto result = pmx::validate(model_);
+    for (auto &issue : result.issues) {
+        const auto assign = [&](const char *kind, auto handle, const char *field) {
+            issue.object = kind;
+            issue.location.id = handle.id;
+            issue.location.generation = handle.generation;
+            issue.location.field = field;
+        };
+        if (issue.message.find("vertex") != std::string::npos && !vertices_.slots.empty())
+            assign("vertex", vertices_.at(0), "vertex");
+        else if (issue.message.find("material") != std::string::npos && !materials_.slots.empty())
+            assign("material", materials_.at(0), "material");
+        else if ((issue.message.find("bone") != std::string::npos || issue.message.find("IK") != std::string::npos) &&
+                 !bones_.slots.empty())
+            assign("bone", bones_.at(0), "bone");
+        else if (issue.message.find("morph") != std::string::npos && !morphs_.slots.empty())
+            assign("morph", morphs_.at(0), "morph");
+        else if (issue.message.find("joint") != std::string::npos && !joints_.slots.empty())
+            assign("joint", joints_.at(0), "joint");
+        else if (issue.message.find("rigid") != std::string::npos && !rigidBodies_.slots.empty())
+            assign("rigidBody", rigidBodies_.at(0), "rigidBody");
+        else if (issue.message.find("display") != std::string::npos && !displayFrames_.slots.empty())
+            assign("displayFrame", displayFrames_.at(0), "displayFrame");
+        else
+            issue.object = "model";
+    }
+    return result;
+}
+
 std::vector<ReferenceSite> PmxDocument::referencesTo(VertexHandle handle) const {
     ensure();
     if (!vertices_.index(handle))
@@ -262,6 +293,14 @@ std::vector<ReferenceSite> PmxDocument::referencesTo(VertexHandle handle) const 
                                   ReferenceField::softBodyPinnedVertex, static_cast<std::uint32_t>(n)});
     }
     return result;
+}
+
+bool PmxDocument::Transaction::setMetadata(PmxMetadata metadata) {
+    if (metadata.version < 2.0F || metadata.version > 2.1F || metadata.additionalUvCount > 4)
+        return false;
+    model_.metadata = std::move(metadata);
+    changes_.topologyChanged = true;
+    return true;
 }
 
 void PmxDocument::remapBoneReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
@@ -564,6 +603,8 @@ bool PmxDocument::Transaction::eraseBone(BoneHandle h, ErasePolicy policy) {
     model_.bones.erase(model_.bones.begin() + static_cast<std::ptrdiff_t>(*target));
     bones_.slots.erase(bones_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     remapBoneReferences(model_, map);
+    recordHandle(changes_.bones, h);
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::moveBone(BoneHandle h, std::size_t destination) {
@@ -585,6 +626,8 @@ bool PmxDocument::Transaction::moveBone(BoneHandle h, std::size_t destination) {
     bones_.slots.erase(bones_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
     bones_.slots.insert(bones_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
     remapBoneReferences(model_, map);
+    recordHandle(changes_.bones, h);
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::eraseMaterial(MaterialHandle h) {
@@ -690,6 +733,8 @@ bool PmxDocument::Transaction::moveMaterial(MaterialHandle h, std::size_t destin
     materials_.slots.erase(materials_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
     materials_.slots.insert(materials_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
     remapMaterialReferences(model_, map);
+    recordHandle(changes_.materials, h);
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::eraseMaterial(MaterialHandle h, std::optional<MaterialHandle> replacement) {
@@ -716,6 +761,8 @@ bool PmxDocument::Transaction::eraseMaterial(MaterialHandle h, std::optional<Mat
     model_.materials.erase(model_.materials.begin() + static_cast<std::ptrdiff_t>(*target));
     materials_.slots.erase(materials_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     remapMaterialReferences(model_, map);
+    recordHandle(changes_.materials, h);
+    changes_.topologyChanged = true;
     return true;
 }
 VertexHandle PmxDocument::Transaction::addVertex(PmxVertex vertex) {
@@ -760,6 +807,33 @@ bool PmxDocument::Transaction::setVertexEdgeScale(VertexHandle handle, float val
 }
 bool PmxDocument::Transaction::setVertexSkin(VertexHandle handle, const PmxVertex &value) {
     return setVertex(handle, value);
+}
+bool PmxDocument::Transaction::setVertexSkin(VertexHandle handle, const PmxVertexSkin &value) {
+    PmxVertex vertex;
+    vertex.weightType = value.type;
+    vertex.weights = value.weights;
+    vertex.sdefC = value.sdefC;
+    vertex.sdefR0 = value.sdefR0;
+    vertex.sdefR1 = value.sdefR1;
+    const auto count = value.type == PmxWeightType::bdef1
+                           ? std::size_t{1}
+                           : (value.type == PmxWeightType::bdef2 || value.type == PmxWeightType::sdef ? std::size_t{2}
+                                                                                                      : std::size_t{4});
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto index = bones_.index(value.bones[i]);
+        if (!index)
+            return false;
+        vertex.bones[i] = static_cast<std::int32_t>(*index);
+    }
+    const auto current = vertices_.index(handle);
+    if (!current)
+        return false;
+    vertex.position = model_.vertices[*current].position;
+    vertex.normal = model_.vertices[*current].normal;
+    vertex.uv = model_.vertices[*current].uv;
+    vertex.additionalUv = model_.vertices[*current].additionalUv;
+    vertex.edgeScale = model_.vertices[*current].edgeScale;
+    return setVertex(handle, vertex);
 }
 VertexEraseImpact PmxDocument::Transaction::analyzeErase(VertexHandle handle) const {
     VertexEraseImpact impact;
@@ -827,6 +901,8 @@ bool PmxDocument::Transaction::moveVertex(VertexHandle h, std::size_t destinatio
     vertices_.slots.erase(vertices_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
     vertices_.slots.insert(vertices_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
     remapVertexReferences(model_, map);
+    recordHandle(changes_.vertices, h);
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::eraseVertex(VertexHandle h) {
@@ -841,6 +917,8 @@ bool PmxDocument::Transaction::eraseVertex(VertexHandle h) {
     model_.vertices.erase(model_.vertices.begin() + static_cast<std::ptrdiff_t>(*target));
     vertices_.slots.erase(vertices_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     remapVertexReferences(model_, map);
+    recordHandle(changes_.vertices, h);
+    changes_.topologyChanged = true;
     return true;
 }
 FaceHandle PmxDocument::Transaction::addFace(VertexHandle a, VertexHandle b, VertexHandle c, MaterialHandle material) {
@@ -915,6 +993,51 @@ bool PmxDocument::Transaction::addMorphOffset(MorphHandle handle, PmxMorphOffset
     return updateValue(morphs_, model_.morphs, handle, [&](auto &morph) { morph.offsets.push_back(value); }) &&
            (recordHandle(changes_.morphs, handle), true);
 }
+bool PmxDocument::Transaction::addVertexMorphOffset(MorphHandle handle, VertexHandle vertex, Float3 value) {
+    const auto morph = morphs_.index(handle);
+    const auto index = vertices_.index(vertex);
+    if (!morph || !index || model_.morphs[*morph].type != 1)
+        return false;
+    PmxMorphOffset offset;
+    offset.index = static_cast<std::int32_t>(*index);
+    offset.vector3 = value;
+    return addMorphOffset(handle, offset);
+}
+bool PmxDocument::Transaction::addBoneMorphOffset(MorphHandle handle, BoneHandle bone, Float3 translation,
+                                                   Float4 rotation) {
+    const auto morph = morphs_.index(handle);
+    const auto index = bones_.index(bone);
+    if (!morph || !index || model_.morphs[*morph].type != 2)
+        return false;
+    PmxMorphOffset offset;
+    offset.index = static_cast<std::int32_t>(*index);
+    offset.vector3 = translation;
+    offset.vector4 = rotation;
+    return addMorphOffset(handle, offset);
+}
+bool PmxDocument::Transaction::addGroupMorphOffset(MorphHandle handle, MorphHandle target, float weight) {
+    const auto morph = morphs_.index(handle);
+    const auto index = morphs_.index(target);
+    if (!morph || !index || model_.morphs[*morph].type != 0)
+        return false;
+    PmxMorphOffset offset;
+    offset.index = static_cast<std::int32_t>(*index);
+    offset.scalar = weight;
+    return addMorphOffset(handle, offset);
+}
+bool PmxDocument::Transaction::addImpulseMorphOffset(MorphHandle handle, RigidBodyHandle body, Float3 velocity,
+                                                      Float3 torque, bool local) {
+    const auto morph = morphs_.index(handle);
+    const auto index = rigidBodies_.index(body);
+    if (!morph || !index || model_.morphs[*morph].type != 10)
+        return false;
+    PmxMorphOffset offset;
+    offset.index = static_cast<std::int32_t>(*index);
+    offset.vector3 = velocity;
+    offset.tertiaryVector3 = torque;
+    offset.local = local;
+    return addMorphOffset(handle, offset);
+}
 bool PmxDocument::Transaction::eraseMorphOffset(MorphHandle handle, std::size_t index) {
     const auto morph = morphs_.index(handle);
     if (!morph || index >= model_.morphs[*morph].offsets.size())
@@ -954,6 +1077,8 @@ bool PmxDocument::Transaction::moveMorph(MorphHandle h, std::size_t destination)
     morphs_.slots.erase(morphs_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
     morphs_.slots.insert(morphs_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
     remapMorphReferences(model_, map);
+    recordHandle(changes_.morphs, h);
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::eraseMorph(MorphHandle h) {
@@ -968,6 +1093,8 @@ bool PmxDocument::Transaction::eraseMorph(MorphHandle h) {
     model_.morphs.erase(model_.morphs.begin() + static_cast<std::ptrdiff_t>(*target));
     morphs_.slots.erase(morphs_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     remapMorphReferences(model_, map);
+    recordHandle(changes_.morphs, h);
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::textureReferenced(std::size_t i) const {
@@ -1020,6 +1147,9 @@ bool PmxDocument::Transaction::moveTexture(TextureHandle h, std::size_t destinat
     textures_.slots.erase(textures_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
     textures_.slots.insert(textures_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
     remapTextureReferences(model_, map);
+    recordHandle(changes_.textures, h);
+    changes_.texturesChanged = true;
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::eraseTexture(TextureHandle h) {
@@ -1034,6 +1164,9 @@ bool PmxDocument::Transaction::eraseTexture(TextureHandle h) {
     model_.textures.erase(model_.textures.begin() + static_cast<std::ptrdiff_t>(*target));
     textures_.slots.erase(textures_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     remapTextureReferences(model_, map);
+    recordHandle(changes_.textures, h);
+    changes_.texturesChanged = true;
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::rigidBodyReferenced(std::size_t i) const {
@@ -1132,6 +1265,9 @@ bool PmxDocument::Transaction::moveRigidBody(RigidBodyHandle h, std::size_t dest
     rigidBodies_.slots.erase(rigidBodies_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
     rigidBodies_.slots.insert(rigidBodies_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
     remapRigidBodyReferences(model_, map);
+    recordHandle(changes_.rigidBodies, h);
+    changes_.physicsChanged = true;
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::eraseRigidBody(RigidBodyHandle h) {
@@ -1146,6 +1282,9 @@ bool PmxDocument::Transaction::eraseRigidBody(RigidBodyHandle h) {
     model_.rigidBodies.erase(model_.rigidBodies.begin() + static_cast<std::ptrdiff_t>(*target));
     rigidBodies_.slots.erase(rigidBodies_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
     remapRigidBodyReferences(model_, map);
+    recordHandle(changes_.rigidBodies, h);
+    changes_.physicsChanged = true;
+    changes_.topologyChanged = true;
     return true;
 }
 JointHandle PmxDocument::Transaction::addJoint(PmxJoint joint) {
@@ -1208,6 +1347,9 @@ bool PmxDocument::Transaction::eraseJoint(JointHandle h) {
         return false;
     model_.joints.erase(model_.joints.begin() + static_cast<std::ptrdiff_t>(*target));
     joints_.slots.erase(joints_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    recordHandle(changes_.joints, h);
+    changes_.physicsChanged = true;
+    changes_.topologyChanged = true;
     return true;
 }
 DisplayFrameHandle PmxDocument::Transaction::addDisplayFrame(PmxDisplayFrame frame) {
@@ -1249,6 +1391,14 @@ bool PmxDocument::Transaction::addDisplayFrameItem(DisplayFrameHandle handle, Pm
     return updateValue(displayFrames_, model_.displayFrames, handle, [&](auto &frame) { frame.items.push_back(value); }) &&
            (recordHandle(changes_.displayFrames, handle), true);
 }
+bool PmxDocument::Transaction::addDisplayFrameItem(DisplayFrameHandle handle, BoneHandle bone) {
+    const auto index = bones_.index(bone);
+    return index && addDisplayFrameItem(handle, PmxDisplayItem{true, static_cast<std::int32_t>(*index)});
+}
+bool PmxDocument::Transaction::addDisplayFrameItem(DisplayFrameHandle handle, MorphHandle morph) {
+    const auto index = morphs_.index(morph);
+    return index && addDisplayFrameItem(handle, PmxDisplayItem{false, static_cast<std::int32_t>(*index)});
+}
 bool PmxDocument::Transaction::eraseDisplayFrameItem(DisplayFrameHandle handle, std::size_t index) {
     const auto frame = displayFrames_.index(handle);
     if (!frame || index >= model_.displayFrames[*frame].items.size())
@@ -1274,6 +1424,8 @@ bool PmxDocument::Transaction::eraseDisplayFrame(DisplayFrameHandle h) {
         return false;
     model_.displayFrames.erase(model_.displayFrames.begin() + static_cast<std::ptrdiff_t>(*target));
     displayFrames_.slots.erase(displayFrames_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    recordHandle(changes_.displayFrames, h);
+    changes_.topologyChanged = true;
     return true;
 }
 SoftBodyHandle PmxDocument::Transaction::addSoftBody(PmxSoftBody body) {
@@ -1322,6 +1474,9 @@ bool PmxDocument::Transaction::eraseSoftBody(SoftBodyHandle h) {
         return false;
     model_.softBodies.erase(model_.softBodies.begin() + static_cast<std::ptrdiff_t>(*target));
     softBodies_.slots.erase(softBodies_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    recordHandle(changes_.softBodies, h);
+    changes_.physicsChanged = true;
+    changes_.topologyChanged = true;
     return true;
 }
 PmxTransactionResult PmxDocument::Transaction::commit() {

@@ -91,6 +91,14 @@ struct PmxFace {
     VertexHandle vertices[3]{};
     MaterialHandle material{};
 };
+struct PmxVertexSkin {
+    PmxWeightType type{PmxWeightType::bdef1};
+    std::array<BoneHandle, 4> bones{};
+    Float4 weights{1.0F, 0.0F, 0.0F, 0.0F};
+    Float3 sdefC{};
+    Float3 sdefR0{};
+    Float3 sdefR1{};
+};
 struct PmxChangeSet {
     bool topologyChanged{};
     std::vector<VertexHandle> vertices;
@@ -228,9 +236,7 @@ class PmxDocument {
         dirty_ = true;
         return model_;
     }
-    [[nodiscard]] ValidationResult validate() const {
-        return pmx::validate(model_);
-    }
+    [[nodiscard]] ValidationResult validate() const;
     [[nodiscard]] VertexHandle vertexHandle(std::size_t i) const {
         ensure();
         return vertices_.at(i);
@@ -413,6 +419,8 @@ class PmxDocument::Transaction {
         if (!i)
             return false;
         model_.bones[*i].name = std::move(name);
+        if (std::find(changes_.bones.begin(), changes_.bones.end(), h) == changes_.bones.end())
+            changes_.bones.push_back(h);
         return true;
     }
     [[nodiscard]] bool setBoneParent(BoneHandle child, BoneHandle parent) {
@@ -430,8 +438,11 @@ class PmxDocument::Transaction {
             cursor = static_cast<std::size_t>(next);
         }
         model_.bones[*c].parent = static_cast<std::int32_t>(*p);
+        if (std::find(changes_.bones.begin(), changes_.bones.end(), child) == changes_.bones.end())
+            changes_.bones.push_back(child);
         return true;
     }
+    [[nodiscard]] bool setMetadata(PmxMetadata metadata);
     [[nodiscard]] bool setBone(BoneHandle h, const PmxBone &bone);
     [[nodiscard]] bool setBoneName(BoneHandle h, std::string value);
     [[nodiscard]] bool setBoneEnglishName(BoneHandle h, std::string value);
@@ -478,6 +489,7 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setVertexAdditionalUv(VertexHandle h, std::uint32_t channel, Float4 value);
     [[nodiscard]] bool setVertexEdgeScale(VertexHandle h, float value);
     [[nodiscard]] bool setVertexSkin(VertexHandle h, const PmxVertex &value);
+    [[nodiscard]] bool setVertexSkin(VertexHandle h, const PmxVertexSkin &value);
     [[nodiscard]] VertexEraseImpact analyzeErase(VertexHandle h) const;
     [[nodiscard]] bool moveVertex(VertexHandle h, std::size_t destination);
     [[nodiscard]] bool eraseVertex(VertexHandle h);
@@ -492,6 +504,11 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setMorphType(MorphHandle h, std::uint8_t value);
     [[nodiscard]] bool setMorphOffset(MorphHandle h, std::size_t index, PmxMorphOffset value);
     [[nodiscard]] bool addMorphOffset(MorphHandle h, PmxMorphOffset value);
+    [[nodiscard]] bool addVertexMorphOffset(MorphHandle h, VertexHandle vertex, Float3 value);
+    [[nodiscard]] bool addBoneMorphOffset(MorphHandle h, BoneHandle bone, Float3 translation, Float4 rotation);
+    [[nodiscard]] bool addGroupMorphOffset(MorphHandle h, MorphHandle target, float weight);
+    [[nodiscard]] bool addImpulseMorphOffset(MorphHandle h, RigidBodyHandle body, Float3 velocity, Float3 torque,
+                                              bool local);
     [[nodiscard]] bool eraseMorphOffset(MorphHandle h, std::size_t index);
     [[nodiscard]] bool moveMorph(MorphHandle h, std::size_t destination);
     [[nodiscard]] bool eraseMorph(MorphHandle h);
@@ -551,6 +568,8 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setDisplayFrameEnglishName(DisplayFrameHandle h, std::string value);
     [[nodiscard]] bool setDisplayFrameItem(DisplayFrameHandle h, std::size_t index, PmxDisplayItem value);
     [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, PmxDisplayItem value);
+    [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, BoneHandle bone);
+    [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, MorphHandle morph);
     [[nodiscard]] bool eraseDisplayFrameItem(DisplayFrameHandle h, std::size_t index);
     [[nodiscard]] bool moveDisplayFrameItem(DisplayFrameHandle h, std::size_t from, std::size_t to);
     [[nodiscard]] bool eraseDisplayFrame(DisplayFrameHandle h);
