@@ -122,6 +122,167 @@ PmxDocument &PmxDocument::operator=(const PmxDocument &other) {
     return *this;
 }
 
+PmxTransactionResult PmxDocument::finishPropertyEdit(PmxChangeSet changes) {
+    auto validation = pmx::validate(model_);
+    if (!validation.valid())
+        return {false, std::move(validation), {}, {}};
+    dirty_ = false;
+    rebuildReferences();
+    return {true, std::move(validation), {}, std::move(changes)};
+}
+
+PmxTransactionResult PmxDocument::replaceMetadata(const PmxMetadata &metadata) {
+    ensure();
+    const auto before = model_.metadata;
+    model_.metadata = metadata;
+    auto result = finishPropertyEdit({});
+    if (!result.committed)
+        model_.metadata = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceVertex(VertexHandle handle, const PmxVertex &vertex) {
+    ensure();
+    const auto index = vertices_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid vertex handle"}, {}};
+    const auto before = model_.vertices[*index];
+    model_.vertices[*index] = vertex;
+    PmxChangeSet changes;
+    changes.vertices.push_back(handle);
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.vertices[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceTexture(TextureHandle handle, const PmxTexture &texture) {
+    ensure();
+    const auto index = textures_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid texture handle"}, {}};
+    const auto before = model_.textures[*index];
+    model_.textures[*index] = texture;
+    PmxChangeSet changes;
+    changes.textures.push_back(handle);
+    changes.texturesChanged = true;
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.textures[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceMaterial(MaterialHandle handle, const PmxMaterial &material) {
+    ensure();
+    const auto index = materials_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid material handle"}, {}};
+    const auto before = model_.materials[*index];
+    model_.materials[*index] = material;
+    PmxChangeSet changes;
+    changes.materials.push_back(handle);
+    changes.texturesChanged = before.textureIndex != material.textureIndex ||
+                              before.sphereTextureIndex != material.sphereTextureIndex ||
+                              before.toonTextureIndex != material.toonTextureIndex;
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.materials[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceBone(BoneHandle handle, const PmxBone &bone) {
+    ensure();
+    const auto index = bones_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid bone handle"}, {}};
+    const auto before = model_.bones[*index];
+    model_.bones[*index] = bone;
+    PmxChangeSet changes;
+    changes.bones.push_back(handle);
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.bones[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceMorph(MorphHandle handle, const PmxMorph &morph) {
+    ensure();
+    const auto index = morphs_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid morph handle"}, {}};
+    const auto before = model_.morphs[*index];
+    model_.morphs[*index] = morph;
+    PmxChangeSet changes;
+    changes.morphs.push_back(handle);
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.morphs[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceDisplayFrame(DisplayFrameHandle handle, const PmxDisplayFrame &frame) {
+    ensure();
+    const auto index = displayFrames_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid display frame handle"}, {}};
+    const auto before = model_.displayFrames[*index];
+    model_.displayFrames[*index] = frame;
+    PmxChangeSet changes;
+    changes.displayFrames.push_back(handle);
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.displayFrames[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceRigidBody(RigidBodyHandle handle, const PmxRigidBody &body) {
+    ensure();
+    const auto index = rigidBodies_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid rigid body handle"}, {}};
+    const auto before = model_.rigidBodies[*index];
+    model_.rigidBodies[*index] = body;
+    PmxChangeSet changes;
+    changes.rigidBodies.push_back(handle);
+    changes.physicsChanged = true;
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.rigidBodies[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceJoint(JointHandle handle, const PmxJoint &joint) {
+    ensure();
+    const auto index = joints_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid joint handle"}, {}};
+    const auto before = model_.joints[*index];
+    model_.joints[*index] = joint;
+    PmxChangeSet changes;
+    changes.joints.push_back(handle);
+    changes.physicsChanged = true;
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.joints[*index] = before;
+    return result;
+}
+
+PmxTransactionResult PmxDocument::replaceSoftBody(SoftBodyHandle handle, const PmxSoftBody &body) {
+    ensure();
+    const auto index = softBodies_.index(handle);
+    if (!index)
+        return {false, {}, {"invalid soft body handle"}, {}};
+    const auto before = model_.softBodies[*index];
+    model_.softBodies[*index] = body;
+    PmxChangeSet changes;
+    changes.softBodies.push_back(handle);
+    changes.physicsChanged = true;
+    auto result = finishPropertyEdit(std::move(changes));
+    if (!result.committed)
+        model_.softBodies[*index] = before;
+    return result;
+}
+
 void PmxDocument::rebuildIndexes() {
     vertices_.domain = domain_;
     textures_.domain = domain_;

@@ -312,6 +312,16 @@ class PmxDocument {
         ensure();
         return resolve(model_.softBodies, softBodies_, h);
     }
+    [[nodiscard]] PmxTransactionResult replaceMetadata(const PmxMetadata &metadata);
+    [[nodiscard]] PmxTransactionResult replaceVertex(VertexHandle h, const PmxVertex &vertex);
+    [[nodiscard]] PmxTransactionResult replaceTexture(TextureHandle h, const PmxTexture &texture);
+    [[nodiscard]] PmxTransactionResult replaceMaterial(MaterialHandle h, const PmxMaterial &material);
+    [[nodiscard]] PmxTransactionResult replaceBone(BoneHandle h, const PmxBone &bone);
+    [[nodiscard]] PmxTransactionResult replaceMorph(MorphHandle h, const PmxMorph &morph);
+    [[nodiscard]] PmxTransactionResult replaceDisplayFrame(DisplayFrameHandle h, const PmxDisplayFrame &frame);
+    [[nodiscard]] PmxTransactionResult replaceRigidBody(RigidBodyHandle h, const PmxRigidBody &body);
+    [[nodiscard]] PmxTransactionResult replaceJoint(JointHandle h, const PmxJoint &joint);
+    [[nodiscard]] PmxTransactionResult replaceSoftBody(SoftBodyHandle h, const PmxSoftBody &body);
     [[nodiscard]] const PmxFace *resolve(FaceHandle h) const {
         ensure();
         return resolve(faces_, facesTable_, h);
@@ -376,6 +386,7 @@ class PmxDocument {
     void rebuildIndexes();
     void rebuildReferences();
     static void remapBoneReferences(PmxModel &model, const std::vector<std::int32_t> &map);
+    [[nodiscard]] PmxTransactionResult finishPropertyEdit(PmxChangeSet changes);
     friend class Transaction;
 };
 
