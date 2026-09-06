@@ -198,6 +198,23 @@ ValidationResult pmx::validate(const PmxModel& model) {
                 addError(result, inRange(link.bone, model.bones.size()), "IK link index is out of range");
         }
     }
+    std::vector<std::uint8_t> boneVisit(model.bones.size());
+    const auto visitBone = [&](auto&& self, std::size_t index) -> bool {
+        if (boneVisit[index] == 1) return false;
+        if (boneVisit[index] == 2) return true;
+        boneVisit[index] = 1;
+        const auto parent = model.bones[index].parent;
+        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() &&
+            !self(self, static_cast<std::size_t>(parent))) return false;
+        boneVisit[index] = 2;
+        return true;
+    };
+    for (std::size_t index = 0; index < model.bones.size(); ++index) {
+        if (!visitBone(visitBone, index)) {
+            result.issues.push_back({ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone hierarchy contains a cycle"});
+            break;
+        }
+    }
     for (const auto& morph : model.morphs) {
         addError(result, morph.type <= 10, "unknown morph type");
         for (const auto& offset : morph.offsets) {

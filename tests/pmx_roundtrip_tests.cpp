@@ -99,6 +99,36 @@ int main() {
         assert(document.resolve(root)->name == "root");
         assert(document.model().vertices[0].bones[0] == 1);
     }
+    {
+        mmd::PmxDocument editable(model);
+        const auto firstFace = editable.faceHandle(0);
+        const auto firstVertex = editable.vertexHandle(0);
+        const auto secondVertex = editable.vertexHandle(1);
+        const auto thirdVertex = editable.vertexHandle(2);
+        auto transaction = editable.transaction();
+        assert(transaction.analyzeErase(firstVertex).faces == 1);
+        const auto secondMaterial = transaction.addMaterial({.name = "second"});
+        assert(secondMaterial);
+        assert(transaction.setFaceMaterial(firstFace, secondMaterial));
+        assert(transaction.addFace(firstVertex, secondVertex, thirdVertex, secondMaterial));
+        const auto unreferencedVertex = transaction.addVertex({.bones = {0, -1, -1, -1}});
+        assert(transaction.moveVertex(unreferencedVertex, 0));
+        const auto firstMorph = transaction.addMorph({.name = "a", .type = 0});
+        const auto secondMorph = transaction.addMorph({.name = "b", .type = 0});
+        assert(transaction.moveMorph(secondMorph, 0));
+        const auto texture = transaction.addTexture({"new.png"});
+        assert(texture);
+        const auto rigidBody = transaction.addRigidBody({.name = "body", .bone = 0});
+        assert(rigidBody);
+        assert(transaction.addJoint({.name = "joint", .bodyA = 0, .bodyB = 0}));
+        const auto result = transaction.commit();
+        assert(result.committed);
+        assert(editable.model().materials[0].indexCount == 0);
+        assert(editable.model().materials[1].indexCount == 6);
+        assert(editable.model().indices.size() == 6);
+        assert(editable.resolve(unreferencedVertex) != nullptr);
+        assert(editable.model().morphs[0].name == "b");
+    }
 
     std::filesystem::remove(path);
     std::filesystem::remove(preservedPath);

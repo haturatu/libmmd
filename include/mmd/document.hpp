@@ -40,6 +40,7 @@ struct ReferenceSite { ReferenceObjectKind ownerKind{}; std::uint64_t ownerId{};
 struct PmxFace { VertexHandle vertices[3]{}; MaterialHandle material{}; };
 enum class ErasePolicy : std::uint8_t { rejectIfReferenced };
 struct EraseImpact { std::size_t vertexWeights{}, childBones{}, ikLinks{}, morphOffsets{}, displayEntries{}, rigidBodies{}; [[nodiscard]] std::size_t total() const noexcept { return vertexWeights+childBones+ikLinks+morphOffsets+displayEntries+rigidBodies; } };
+struct VertexEraseImpact { std::size_t faces{}, morphOffsets{}, softBodyAnchors{}, pinnedVertices{}; [[nodiscard]] std::size_t total() const noexcept { return faces+morphOffsets+softBodyAnchors+pinnedVertices; } };
 struct PmxTransactionResult { bool committed{}; ValidationResult validation; std::vector<std::string> errors; };
 
 class PmxDocument {
@@ -71,7 +72,10 @@ public:
     [[nodiscard]] MaterialHandle materialHandle(std::size_t i) const { ensure(); return materials_.at(i); }
     [[nodiscard]] BoneHandle boneHandle(std::size_t i) const { ensure(); return bones_.at(i); }
     [[nodiscard]] MorphHandle morphHandle(std::size_t i) const { ensure(); return morphs_.at(i); }
+    [[nodiscard]] DisplayFrameHandle displayFrameHandle(std::size_t i) const { ensure(); return displayFrames_.at(i); }
     [[nodiscard]] RigidBodyHandle rigidBodyHandle(std::size_t i) const { ensure(); return rigidBodies_.at(i); }
+    [[nodiscard]] JointHandle jointHandle(std::size_t i) const { ensure(); return joints_.at(i); }
+    [[nodiscard]] SoftBodyHandle softBodyHandle(std::size_t i) const { ensure(); return softBodies_.at(i); }
     [[nodiscard]] FaceHandle faceHandle(std::size_t i) const { ensure(); return facesTable_.at(i); }
     [[nodiscard]] const std::vector<PmxFace>& faces() const { ensure(); return faces_; }
     [[nodiscard]] const PmxVertex* resolve(VertexHandle h) const { ensure(); return resolve(model_.vertices,vertices_,h); }
@@ -79,7 +83,10 @@ public:
     [[nodiscard]] const PmxMaterial* resolve(MaterialHandle h) const { ensure(); return resolve(model_.materials,materials_,h); }
     [[nodiscard]] const PmxBone* resolve(BoneHandle h) const { ensure(); return resolve(model_.bones,bones_,h); }
     [[nodiscard]] const PmxMorph* resolve(MorphHandle h) const { ensure(); return resolve(model_.morphs,morphs_,h); }
+    [[nodiscard]] const PmxDisplayFrame* resolve(DisplayFrameHandle h) const { ensure(); return resolve(model_.displayFrames,displayFrames_,h); }
     [[nodiscard]] const PmxRigidBody* resolve(RigidBodyHandle h) const { ensure(); return resolve(model_.rigidBodies,rigidBodies_,h); }
+    [[nodiscard]] const PmxJoint* resolve(JointHandle h) const { ensure(); return resolve(model_.joints,joints_,h); }
+    [[nodiscard]] const PmxSoftBody* resolve(SoftBodyHandle h) const { ensure(); return resolve(model_.softBodies,softBodies_,h); }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(VertexHandle h) const;
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(TextureHandle h) const { return lookup(h,refs_.textures); }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(MaterialHandle h) const { return lookup(h,refs_.materials); }
@@ -101,20 +108,49 @@ private:
 
 class PmxDocument::Transaction {
 public:
-    explicit Transaction(PmxDocument& d) : document_(d) { document_.ensure(); model_=d.model_; bones_=d.bones_; materials_=d.materials_; }
+    explicit Transaction(PmxDocument& d) : document_(d) { document_.ensure(); model_=d.model_; vertices_=d.vertices_; textures_=d.textures_; materials_=d.materials_; bones_=d.bones_; morphs_=d.morphs_; displayFrames_=d.displayFrames_; rigidBodies_=d.rigidBodies_; joints_=d.joints_; softBodies_=d.softBodies_; facesTable_=d.facesTable_; faces_=d.faces_; }
     [[nodiscard]] BoneHandle addBone(PmxBone bone) { return insertBone(model_.bones.size(),std::move(bone)); }
     [[nodiscard]] BoneHandle insertBone(std::size_t destination,PmxBone bone);
     [[nodiscard]] bool renameBone(BoneHandle h,std::string name) { const auto i=bones_.index(h); if(!i) return false; model_.bones[*i].name=std::move(name); return true; }
-    [[nodiscard]] bool setBoneParent(BoneHandle child,BoneHandle parent) { const auto c=bones_.index(child),p=bones_.index(parent); if(!c||!p) return false; model_.bones[*c].parent=static_cast<std::int32_t>(*p); return true; }
+    [[nodiscard]] bool setBoneParent(BoneHandle child,BoneHandle parent) { const auto c=bones_.index(child),p=bones_.index(parent); if(!c||!p||*c==*p) return false; for(auto cursor=*p;;) { if(cursor==*c) return false; const auto next=model_.bones[cursor].parent; if(next<0) break; cursor=static_cast<std::size_t>(next); } model_.bones[*c].parent=static_cast<std::int32_t>(*p); return true; }
     [[nodiscard]] EraseImpact analyzeErase(BoneHandle h) const;
     [[nodiscard]] bool eraseBone(BoneHandle h, ErasePolicy policy = ErasePolicy::rejectIfReferenced);
     [[nodiscard]] bool moveBone(BoneHandle h,std::size_t destination);
     [[nodiscard]] bool eraseMaterial(MaterialHandle h);
+    [[nodiscard]] MaterialHandle addMaterial(PmxMaterial material);
+    [[nodiscard]] bool moveMaterial(MaterialHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseMaterial(MaterialHandle h, std::optional<MaterialHandle> replacement);
+    [[nodiscard]] VertexHandle addVertex(PmxVertex vertex);
+    [[nodiscard]] VertexEraseImpact analyzeErase(VertexHandle h) const;
+    [[nodiscard]] bool moveVertex(VertexHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseVertex(VertexHandle h);
+    [[nodiscard]] FaceHandle addFace(VertexHandle a, VertexHandle b, VertexHandle c, MaterialHandle material);
+    [[nodiscard]] bool eraseFace(FaceHandle h);
+    [[nodiscard]] bool setFaceMaterial(FaceHandle h, MaterialHandle material);
+    [[nodiscard]] MorphHandle addMorph(PmxMorph morph);
+    [[nodiscard]] bool moveMorph(MorphHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseMorph(MorphHandle h);
+    [[nodiscard]] TextureHandle addTexture(PmxTexture texture);
+    [[nodiscard]] bool moveTexture(TextureHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseTexture(TextureHandle h);
+    [[nodiscard]] RigidBodyHandle addRigidBody(PmxRigidBody body);
+    [[nodiscard]] bool moveRigidBody(RigidBodyHandle h, std::size_t destination);
+    [[nodiscard]] bool eraseRigidBody(RigidBodyHandle h);
+    [[nodiscard]] JointHandle addJoint(PmxJoint joint);
+    [[nodiscard]] bool eraseJoint(JointHandle h);
+    [[nodiscard]] DisplayFrameHandle addDisplayFrame(PmxDisplayFrame frame);
+    [[nodiscard]] bool eraseDisplayFrame(DisplayFrameHandle h);
+    [[nodiscard]] SoftBodyHandle addSoftBody(PmxSoftBody body);
+    [[nodiscard]] bool eraseSoftBody(SoftBodyHandle h);
     [[nodiscard]] PmxTransactionResult commit();
 private:
-    PmxDocument& document_; PmxModel model_; Table<BoneTag> bones_; Table<MaterialTag> materials_; std::vector<std::string> errors_; bool done_{};
+    PmxDocument& document_; PmxModel model_; Table<VertexTag> vertices_; Table<TextureTag> textures_; Table<MaterialTag> materials_; Table<BoneTag> bones_; Table<MorphTag> morphs_; Table<DisplayFrameTag> displayFrames_; Table<RigidBodyTag> rigidBodies_; Table<JointTag> joints_; Table<SoftBodyTag> softBodies_; Table<FaceTag> facesTable_; std::vector<PmxFace> faces_; std::vector<std::string> errors_; bool done_{};
     [[nodiscard]] bool boneReferenced(std::size_t i) const;
     [[nodiscard]] bool materialReferenced(std::size_t i) const;
+    [[nodiscard]] bool vertexReferenced(std::size_t i) const;
+    [[nodiscard]] bool morphReferenced(std::size_t i) const;
+    [[nodiscard]] bool textureReferenced(std::size_t i) const;
+    [[nodiscard]] bool rigidBodyReferenced(std::size_t i) const;
 };
 
 inline PmxDocument::Transaction PmxDocument::transaction() { ensure(); return Transaction(*this); }
