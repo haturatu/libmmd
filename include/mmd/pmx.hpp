@@ -240,8 +240,47 @@ struct ValidationResult {
 };
 
 enum class PmxSaveMode : std::uint8_t { preserve, canonical };
-struct PmxSaveOptions { PmxSaveMode mode{PmxSaveMode::preserve}; };
-struct PmxSaveReport { bool changedEncoding{}; bool widenedVertexIndex{}; bool widenedTextureIndex{}; bool widenedMaterialIndex{}; bool widenedBoneIndex{}; bool widenedMorphIndex{}; bool widenedRigidBodyIndex{}; };
+enum class PmxIndexWidthPolicy : std::uint8_t { preserveAndWiden, minimal, force32 };
+
+struct PmxIndexWidths {
+    std::uint8_t vertex{4};
+    std::uint8_t texture{4};
+    std::uint8_t material{4};
+    std::uint8_t bone{4};
+    std::uint8_t morph{4};
+    std::uint8_t rigidBody{4};
+};
+
+struct PmxSaveOptions {
+    PmxSaveMode mode{PmxSaveMode::preserve};
+    PmxIndexWidthPolicy indexWidths{PmxIndexWidthPolicy::preserveAndWiden};
+};
+
+struct PmxIndexWidthChange {
+    std::uint8_t oldWidth{};
+    std::uint8_t newWidth{};
+    [[nodiscard]] constexpr bool widened() const noexcept { return newWidth > oldWidth; }
+};
+
+struct PmxSaveReport {
+    bool changedEncoding{};
+    PmxIndexWidthChange vertex;
+    PmxIndexWidthChange texture;
+    PmxIndexWidthChange material;
+    PmxIndexWidthChange bone;
+    PmxIndexWidthChange morph;
+    PmxIndexWidthChange rigidBody;
+};
+
+struct SemanticDiff {
+    std::string path;
+    std::string message;
+};
+
+struct SemanticCompareResult {
+    std::vector<SemanticDiff> differences;
+    [[nodiscard]] bool equal() const noexcept { return differences.empty(); }
+};
 
 namespace pmx {
 [[nodiscard]] PmxMetadata probe(const std::filesystem::path& path);
@@ -249,6 +288,12 @@ namespace pmx {
 [[nodiscard]] PmxMesh loadMesh(const std::filesystem::path& path);
 [[nodiscard]] PmxSaveReport save(const std::filesystem::path& path, const PmxModel& model,
                                  PmxSaveOptions options = {});
+[[nodiscard]] std::uint8_t requiredVertexIndexWidth(std::size_t count) noexcept;
+[[nodiscard]] std::uint8_t requiredSignedIndexWidth(std::size_t count) noexcept;
+[[nodiscard]] PmxIndexWidths chooseIndexWidths(const PmxModel& model,
+                                                PmxSaveOptions options = {}) noexcept;
+[[nodiscard]] SemanticCompareResult semanticCompare(const PmxModel& lhs, const PmxModel& rhs);
+[[nodiscard]] bool semanticEqual(const PmxModel& lhs, const PmxModel& rhs);
 [[nodiscard]] ValidationResult validate(const PmxModel& model);
 [[nodiscard]] std::filesystem::path resolveTexturePath(const PmxModel& model, std::size_t textureIndex);
 } // namespace pmx

@@ -27,6 +27,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(
     mmd_core
     src/formats/pmx_reader.cpp
+    src/formats/pmx_semantic.cpp
     src/formats/pmx_writer.cpp
     src/formats/vmd.cpp
     src/internal/mapped_file.cpp
