@@ -5,5 +5,5 @@
 #define LIBMMD_VERSION_PATCH 3
 
 namespace mmd {
-inline constexpr const char* version = "0.2.3";
+inline constexpr const char *version = "0.2.3";
 }

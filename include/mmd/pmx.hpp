@@ -1,7 +1,7 @@
 #pragma once
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -228,12 +228,17 @@ struct PmxMesh {
 
 enum class ValidationSeverity : std::uint8_t { info, warning, error, fatal };
 enum class ValidationCode : std::uint16_t { generic, invalid_format, invalid_reference, material_range, bone_cycle };
-struct ValidationIssue { ValidationSeverity severity{ValidationSeverity::error}; ValidationCode code{ValidationCode::generic}; std::string object; std::string message; };
+struct ValidationIssue {
+    ValidationSeverity severity{ValidationSeverity::error};
+    ValidationCode code{ValidationCode::generic};
+    std::string object;
+    std::string message;
+};
 struct ValidationResult {
     std::vector<ValidationIssue> issues;
     [[nodiscard]] bool valid() const noexcept {
         return std::none_of(issues.begin(), issues.end(),
-                            [](const auto& issue) { return issue.severity >= ValidationSeverity::error; });
+                            [](const auto &issue) { return issue.severity >= ValidationSeverity::error; });
     }
 };
 
@@ -257,7 +262,9 @@ struct PmxSaveOptions {
 struct PmxIndexWidthChange {
     std::uint8_t oldWidth{};
     std::uint8_t newWidth{};
-    [[nodiscard]] constexpr bool widened() const noexcept { return newWidth > oldWidth; }
+    [[nodiscard]] constexpr bool widened() const noexcept {
+        return newWidth > oldWidth;
+    }
 };
 
 struct PmxSaveReport {
@@ -277,27 +284,27 @@ struct SemanticDiff {
 
 struct SemanticCompareResult {
     std::vector<SemanticDiff> differences;
-    [[nodiscard]] bool equal() const noexcept { return differences.empty(); }
+    [[nodiscard]] bool equal() const noexcept {
+        return differences.empty();
+    }
 };
 
 enum class PmxComparisonProfile : std::uint8_t { logical, preservation };
 
 namespace pmx {
-[[nodiscard]] PmxMetadata probe(const std::filesystem::path& path);
-[[nodiscard]] PmxModel load(const std::filesystem::path& path);
-[[nodiscard]] PmxMesh loadMesh(const std::filesystem::path& path);
-[[nodiscard]] PmxSaveReport save(const std::filesystem::path& path, const PmxModel& model,
-                                 PmxSaveOptions options = {});
+[[nodiscard]] PmxMetadata probe(const std::filesystem::path &path);
+[[nodiscard]] PmxModel load(const std::filesystem::path &path);
+[[nodiscard]] PmxMesh loadMesh(const std::filesystem::path &path);
+[[nodiscard]] PmxSaveReport save(const std::filesystem::path &path, const PmxModel &model, PmxSaveOptions options = {});
 [[nodiscard]] std::uint8_t requiredVertexIndexWidth(std::size_t count) noexcept;
 [[nodiscard]] std::uint8_t requiredSignedIndexWidth(std::size_t count) noexcept;
-[[nodiscard]] PmxIndexWidths chooseIndexWidths(const PmxModel& model,
-                                                PmxSaveOptions options = {}) noexcept;
-[[nodiscard]] SemanticCompareResult semanticCompare(const PmxModel& lhs, const PmxModel& rhs,
-                                                     PmxComparisonProfile profile = PmxComparisonProfile::logical);
-[[nodiscard]] bool semanticEqual(const PmxModel& lhs, const PmxModel& rhs,
+[[nodiscard]] PmxIndexWidths chooseIndexWidths(const PmxModel &model, PmxSaveOptions options = {}) noexcept;
+[[nodiscard]] SemanticCompareResult semanticCompare(const PmxModel &lhs, const PmxModel &rhs,
+                                                    PmxComparisonProfile profile = PmxComparisonProfile::logical);
+[[nodiscard]] bool semanticEqual(const PmxModel &lhs, const PmxModel &rhs,
                                  PmxComparisonProfile profile = PmxComparisonProfile::logical);
-[[nodiscard]] ValidationResult validate(const PmxModel& model);
-[[nodiscard]] std::filesystem::path resolveTexturePath(const PmxModel& model, std::size_t textureIndex);
+[[nodiscard]] ValidationResult validate(const PmxModel &model);
+[[nodiscard]] std::filesystem::path resolveTexturePath(const PmxModel &model, std::size_t textureIndex);
 } // namespace pmx
 
 } // namespace mmd

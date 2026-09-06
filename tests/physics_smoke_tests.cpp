@@ -40,8 +40,7 @@ int main() {
     for (int i = 0; i < 60; ++i)
         physics.step(1.0F / 60.0F);
     const auto after = physics.bodyTransform(0);
-    if (!std::isfinite(after.position[0]) || !std::isfinite(after.position[1]) ||
-        !std::isfinite(after.position[2])) {
+    if (!std::isfinite(after.position[0]) || !std::isfinite(after.position[1]) || !std::isfinite(after.position[2])) {
         std::printf("FAIL: body transform is non-finite after gravity simulation\n");
         return 1;
     }

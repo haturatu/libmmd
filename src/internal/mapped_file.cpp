@@ -14,20 +14,21 @@
 
 namespace mmd {
 
-MappedFileStream::Buffer::Buffer(const std::filesystem::path& path)
+MappedFileStream::Buffer::Buffer(const std::filesystem::path &path)
 #if defined(__linux__)
     : fileDescriptor_(::open(path.c_str(), O_RDONLY | O_CLOEXEC))
 #endif
 {
 #if defined(__linux__)
     if (fileDescriptor_ >= 0) {
-        struct stat metadata {};
+        struct stat metadata{};
         if (::fstat(fileDescriptor_, &metadata) == 0 && metadata.st_size > 0) {
             mappedSize_ = static_cast<std::size_t>(metadata.st_size);
-            void* address = ::mmap(nullptr, mappedSize_, PROT_READ, MAP_PRIVATE, fileDescriptor_, 0);
+            void *address = ::mmap(nullptr, mappedSize_, PROT_READ, MAP_PRIVATE, fileDescriptor_, 0);
             if (address != MAP_FAILED) {
-                mapped_ = static_cast<const char*>(address);
-                setg(const_cast<char*>(mapped_), const_cast<char*>(mapped_), const_cast<char*>(mapped_ + mappedSize_));
+                mapped_ = static_cast<const char *>(address);
+                setg(const_cast<char *>(mapped_), const_cast<char *>(mapped_),
+                     const_cast<char *>(mapped_ + mappedSize_));
                 return;
             }
         }
@@ -97,7 +98,7 @@ MappedFileStream::Buffer::pos_type MappedFileStream::Buffer::seekpos(pos_type po
 void MappedFileStream::Buffer::close() noexcept {
 #if defined(__linux__)
     if (mapped_ != nullptr)
-        ::munmap(const_cast<char*>(mapped_), mappedSize_);
+        ::munmap(const_cast<char *>(mapped_), mappedSize_);
     if (fileDescriptor_ >= 0)
         ::close(fileDescriptor_);
 #endif
@@ -106,7 +107,7 @@ void MappedFileStream::Buffer::close() noexcept {
     fileDescriptor_ = -1;
 }
 
-MappedFileStream::MappedFileStream(const std::filesystem::path& path) : std::istream(nullptr), buffer_(path) {
+MappedFileStream::MappedFileStream(const std::filesystem::path &path) : std::istream(nullptr), buffer_(path) {
     rdbuf(&buffer_);
 }
 

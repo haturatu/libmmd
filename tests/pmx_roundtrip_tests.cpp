@@ -1,5 +1,5 @@
-#include <mmd/pmx.hpp>
 #include <mmd/document.hpp>
+#include <mmd/pmx.hpp>
 
 #include <cassert>
 #include <filesystem>
@@ -17,7 +17,7 @@ int main() {
     model.materials = {{.name = "material", .indexCount = 3}};
     model.bones = {{.name = "root", .tailOffset = {0.0F, 1.0F, 0.0F}}};
     const auto path = std::filesystem::temp_directory_path() / "libmmd-pmx-roundtrip.pmx";
-    mmd::pmx::save(path, model);
+    static_cast<void>(mmd::pmx::save(path, model));
     const auto reloaded = mmd::pmx::load(path);
     assert(reloaded.metadata.modelName == model.metadata.modelName);
     assert(reloaded.vertices.size() == model.vertices.size());

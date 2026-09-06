@@ -5,7 +5,7 @@
 
 namespace mmd::log {
 
-template <typename... Args> void debug(Args&&... args) {
+template <typename... Args> void debug(Args &&...args) {
     static std::mutex mutex;
     std::scoped_lock lock(mutex);
     std::cout << "[DEBUG] ";
@@ -14,7 +14,7 @@ template <typename... Args> void debug(Args&&... args) {
     std::cout.flush();
 }
 
-template <typename... Args> void info(Args&&... args) {
+template <typename... Args> void info(Args &&...args) {
     static std::mutex mutex;
     std::scoped_lock lock(mutex);
     std::cout << "[INFO] ";
@@ -23,7 +23,7 @@ template <typename... Args> void info(Args&&... args) {
     std::cout.flush();
 }
 
-template <typename... Args> void warn(Args&&... args) {
+template <typename... Args> void warn(Args &&...args) {
     static std::mutex mutex;
     std::scoped_lock lock(mutex);
     std::cerr << "[WARN] ";
