@@ -1,4 +1,5 @@
 #include <mmd/pmx.hpp>
+#include <mmd/document.hpp>
 
 #include <cassert>
 #include <filesystem>
@@ -56,6 +57,28 @@ int main() {
     const auto diff = mmd::pmx::semanticCompare(model, semanticallyEquivalent);
     assert(!diff.equal());
     assert(!diff.differences.empty());
+
+    mmd::PmxDocument document(model);
+    const auto root = document.boneHandle(0);
+    assert(document.resolve(root) != nullptr);
+    assert(document.referencesTo(root).size() == 3);
+    {
+        auto transaction = document.transaction();
+        assert(!transaction.eraseBone(root));
+        const auto result = transaction.commit();
+        assert(!result.committed);
+        assert(!result.errors.empty());
+    }
+    {
+        auto transaction = document.transaction();
+        const auto extra = transaction.addBone({.name = "extra"});
+        assert(extra);
+        assert(transaction.moveBone(root, 1));
+        const auto result = transaction.commit();
+        assert(result.committed);
+        assert(document.resolve(root)->name == "root");
+        assert(document.model().vertices[0].bones[0] == 1);
+    }
 
     std::filesystem::remove(path);
     std::filesystem::remove(preservedPath);
