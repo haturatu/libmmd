@@ -54,6 +54,11 @@ target_include_directories(
 )
 target_compile_features(mmd_core PUBLIC cxx_std_20)
 
+if(NOT WIN32)
+    find_package(Iconv REQUIRED)
+    target_link_libraries(mmd_core PRIVATE Iconv::Iconv)
+endif()
+
 function(libmmd_enable_warnings target)
     if(NOT LIBMMD_WARNINGS_AS_ERRORS)
         return()
