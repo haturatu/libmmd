@@ -82,7 +82,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: >-
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          cmake -S . -B build -G "Visual Studio 18 2026" -A x64
           -DLIBMMD_BUILD_TESTS=ON
           -DLIBMMD_INSTALL=ON
           -DLIBMMD_ENABLE_PHYSICS=OFF

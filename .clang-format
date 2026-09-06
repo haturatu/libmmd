@@ -5,3 +5,4 @@ BreakBeforeBraces: Attach
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
 SortIncludes: CaseSensitive
+SpaceBeforeCpp11BracedList: false

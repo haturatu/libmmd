@@ -124,6 +124,7 @@ if(LIBMMD_ENABLE_PHYSICS)
             set(LIBMMD_HAS_BULLET 1)
             target_include_directories(
                 mmd_physics
+                SYSTEM
                 PRIVATE ${BULLET_INCLUDE_DIRS}
             )
             target_link_libraries(mmd_physics PRIVATE ${BULLET_LIBRARIES})
