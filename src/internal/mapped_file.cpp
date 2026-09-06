@@ -62,7 +62,7 @@ MappedFileStream::Buffer::pos_type MappedFileStream::Buffer::seekoff(off_type of
                                                                      std::ios_base::openmode which) {
     if (which != std::ios_base::in || size() > static_cast<std::size_t>(std::numeric_limits<off_type>::max()))
         return pos_type(off_type(-1));
-    const auto end = static_cast<off_type>(size());
+    const auto endPosition = static_cast<off_type>(size());
     const auto current = gptr() == nullptr ? off_type{} : static_cast<off_type>(gptr() - eback());
     off_type base{};
     switch (way) {
@@ -72,12 +72,12 @@ MappedFileStream::Buffer::pos_type MappedFileStream::Buffer::seekoff(off_type of
         base = current;
         break;
     case std::ios_base::end:
-        base = end;
+        base = endPosition;
         break;
     default:
         return pos_type(off_type(-1));
     }
-    if (off > end - base || off < -base)
+    if (off > endPosition - base || off < -base)
         return pos_type(off_type(-1));
     const auto position = base + off;
     setg(eback(), eback() == nullptr ? nullptr : eback() + position, egptr());
@@ -87,8 +87,8 @@ MappedFileStream::Buffer::pos_type MappedFileStream::Buffer::seekoff(off_type of
 MappedFileStream::Buffer::pos_type MappedFileStream::Buffer::seekpos(pos_type position, std::ios_base::openmode which) {
     if (which != std::ios_base::in || size() > static_cast<std::size_t>(std::numeric_limits<off_type>::max()))
         return pos_type(off_type(-1));
-    const auto end = static_cast<off_type>(size());
-    if (position < pos_type(0) || position > pos_type(end))
+    const auto endPosition = static_cast<off_type>(size());
+    if (position < pos_type(0) || position > pos_type(endPosition))
         return pos_type(off_type(-1));
     const auto offset = static_cast<off_type>(position);
     setg(eback(), eback() == nullptr ? nullptr : eback() + offset, egptr());

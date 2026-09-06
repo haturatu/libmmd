@@ -6,12 +6,20 @@
 #include <charconv>
 #include <cstring>
 #include <fstream>
-#include <iconv.h>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <iconv.h>
+#endif
 
 namespace mmd {
 namespace {
@@ -154,6 +162,26 @@ float catmullRom(float p0, float p1, float p2, float p3, float t) noexcept {
 std::string decodeCp932(std::string_view input) {
     if (input.empty())
         return {};
+#if defined(_WIN32)
+    if (input.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw std::runtime_error("CP932 input is too large");
+    const auto inputSize = static_cast<int>(input.size());
+    const auto wideSize = MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, input.data(), inputSize, nullptr, 0);
+    if (wideSize == 0)
+        throw std::runtime_error("CP932 conversion failed");
+    std::wstring wide(static_cast<std::size_t>(wideSize), L'\0');
+    if (MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, input.data(), inputSize, wide.data(), wideSize) == 0)
+        throw std::runtime_error("CP932 conversion failed");
+    const auto outputSize =
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wideSize, nullptr, 0, nullptr, nullptr);
+    if (outputSize == 0)
+        throw std::runtime_error("UTF-8 conversion failed");
+    std::string output(static_cast<std::size_t>(outputSize), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wideSize, output.data(), outputSize, nullptr,
+                            nullptr) == 0)
+        throw std::runtime_error("UTF-8 conversion failed");
+    return output;
+#else
     iconv_t converter = iconv_open("UTF-8", "CP932");
     if (converter == reinterpret_cast<iconv_t>(-1))
         throw std::runtime_error("CP932 converter is unavailable");
@@ -182,11 +210,30 @@ std::string decodeCp932(std::string_view input) {
     iconv_close(converter);
     output.resize(static_cast<std::size_t>(destination - output.data()));
     return output;
+#endif
 }
 
 std::string encodeCp932(std::string_view input) {
     if (input.empty())
         return {};
+#if defined(_WIN32)
+    if (input.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw std::runtime_error("UTF-8 input is too large");
+    const auto inputSize = static_cast<int>(input.size());
+    const auto wideSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(), inputSize, nullptr, 0);
+    if (wideSize == 0)
+        throw std::runtime_error("UTF-8 conversion failed");
+    std::wstring wide(static_cast<std::size_t>(wideSize), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(), inputSize, wide.data(), wideSize) == 0)
+        throw std::runtime_error("UTF-8 conversion failed");
+    const auto outputSize = WideCharToMultiByte(932, 0, wide.data(), wideSize, nullptr, 0, "?", nullptr);
+    if (outputSize == 0)
+        throw std::runtime_error("CP932 conversion failed");
+    std::string output(static_cast<std::size_t>(outputSize), '\0');
+    if (WideCharToMultiByte(932, 0, wide.data(), wideSize, output.data(), outputSize, "?", nullptr) == 0)
+        throw std::runtime_error("CP932 conversion failed");
+    return output;
+#else
     iconv_t converter = iconv_open("CP932//TRANSLIT", "UTF-8");
     if (converter == reinterpret_cast<iconv_t>(-1))
         throw std::runtime_error("CP932 encoder is unavailable");
@@ -220,6 +267,7 @@ std::string encodeCp932(std::string_view input) {
     iconv_close(converter);
     output.resize(static_cast<std::size_t>(destination - output.data()));
     return output;
+#endif
 }
 
 VmdMotion loadVmd(const std::filesystem::path &path) {
