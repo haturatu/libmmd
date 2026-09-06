@@ -41,18 +41,22 @@ struct PmxFace { VertexHandle vertices[3]{}; MaterialHandle material{}; };
 enum class ErasePolicy : std::uint8_t { rejectIfReferenced };
 struct EraseImpact { std::size_t vertexWeights{}, childBones{}, ikLinks{}, morphOffsets{}, displayEntries{}, rigidBodies{}; [[nodiscard]] std::size_t total() const noexcept { return vertexWeights+childBones+ikLinks+morphOffsets+displayEntries+rigidBodies; } };
 struct VertexEraseImpact { std::size_t faces{}, morphOffsets{}, softBodyAnchors{}, pinnedVertices{}; [[nodiscard]] std::size_t total() const noexcept { return faces+morphOffsets+softBodyAnchors+pinnedVertices; } };
+struct BoneDraft { PmxBone value; std::optional<BoneHandle> parent; };
 struct PmxTransactionResult { bool committed{}; ValidationResult validation; std::vector<std::string> errors; };
 
 class PmxDocument {
 public:
     template <typename Tag> struct Slot { std::uint64_t id{}; std::uint32_t generation{1}; };
     template <typename Tag> struct Table {
-        std::uint64_t nextId{1}; std::vector<Slot<Tag>> slots;
-        void reset(std::size_t count) { slots.clear(); slots.reserve(count); for (std::size_t i=0;i<count;++i) slots.push_back({nextId++,1}); }
+        std::uint64_t nextId{1}; std::vector<Slot<Tag>> slots; mutable std::unordered_map<std::uint64_t,std::size_t> indexById;
+        void rebuildIndex() const { indexById.clear(); indexById.reserve(slots.size()); for(std::size_t i=0;i<slots.size();++i) indexById.emplace(slots[i].id,i); }
+        void reset(std::size_t count) { slots.clear(); slots.reserve(count); for (std::size_t i=0;i<count;++i) slots.push_back({nextId++,1}); rebuildIndex(); }
         [[nodiscard]] PmxHandle<Tag> at(std::size_t i) const { return i < slots.size() ? PmxHandle<Tag>{slots[i].id,slots[i].generation} : PmxHandle<Tag>{}; }
-        [[nodiscard]] std::optional<std::size_t> index(PmxHandle<Tag> h) const { for(std::size_t i=0;i<slots.size();++i) if(slots[i].id==h.id && slots[i].generation==h.generation) return i; return std::nullopt; }
-        [[nodiscard]] PmxHandle<Tag> append() { slots.push_back({nextId++,1}); return at(slots.size()-1); }
-        [[nodiscard]] PmxHandle<Tag> insert(std::size_t i) { if(i>slots.size()) return {}; slots.insert(slots.begin()+static_cast<std::ptrdiff_t>(i),{nextId++,1}); return at(i); }
+        [[nodiscard]] std::optional<std::size_t> index(PmxHandle<Tag> h) const { auto found=indexById.find(h.id); if(found!=indexById.end()&&found->second<slots.size()&&slots[found->second].id==h.id&&slots[found->second].generation==h.generation) return found->second; if(found!=indexById.end()) { rebuildIndex(); found=indexById.find(h.id); } if(found==indexById.end()||slots[found->second].generation!=h.generation) return std::nullopt; return found->second; }
+        [[nodiscard]] PmxHandle<Tag> append() { slots.push_back({nextId++,1}); indexById.emplace(slots.back().id,slots.size()-1); return at(slots.size()-1); }
+        [[nodiscard]] PmxHandle<Tag> insert(std::size_t i) { if(i>slots.size()) return {}; slots.insert(slots.begin()+static_cast<std::ptrdiff_t>(i),{nextId++,1}); rebuildIndex(); return at(i); }
+        void erase(std::size_t i) { slots.erase(slots.begin()+static_cast<std::ptrdiff_t>(i)); rebuildIndex(); }
+        void move(std::size_t from,std::size_t to) { auto value=slots[from]; slots.erase(slots.begin()+static_cast<std::ptrdiff_t>(from)); slots.insert(slots.begin()+static_cast<std::ptrdiff_t>(to),value); rebuildIndex(); }
     };
 private:
     struct ReferenceIndex {
@@ -88,18 +92,18 @@ public:
     [[nodiscard]] const PmxJoint* resolve(JointHandle h) const { ensure(); return resolve(model_.joints,joints_,h); }
     [[nodiscard]] const PmxSoftBody* resolve(SoftBodyHandle h) const { ensure(); return resolve(model_.softBodies,softBodies_,h); }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(VertexHandle h) const;
-    [[nodiscard]] std::vector<ReferenceSite> referencesTo(TextureHandle h) const { return lookup(h,refs_.textures); }
-    [[nodiscard]] std::vector<ReferenceSite> referencesTo(MaterialHandle h) const { return lookup(h,refs_.materials); }
-    [[nodiscard]] std::vector<ReferenceSite> referencesTo(BoneHandle h) const { return lookup(h,refs_.bones); }
-    [[nodiscard]] std::vector<ReferenceSite> referencesTo(MorphHandle h) const { return lookup(h,refs_.morphs); }
-    [[nodiscard]] std::vector<ReferenceSite> referencesTo(RigidBodyHandle h) const { return lookup(h,refs_.rigidBodies); }
+    [[nodiscard]] std::vector<ReferenceSite> referencesTo(TextureHandle h) const { return lookup(h,textures_,refs_.textures); }
+    [[nodiscard]] std::vector<ReferenceSite> referencesTo(MaterialHandle h) const { return lookup(h,materials_,refs_.materials); }
+    [[nodiscard]] std::vector<ReferenceSite> referencesTo(BoneHandle h) const { return lookup(h,bones_,refs_.bones); }
+    [[nodiscard]] std::vector<ReferenceSite> referencesTo(MorphHandle h) const { return lookup(h,morphs_,refs_.morphs); }
+    [[nodiscard]] std::vector<ReferenceSite> referencesTo(RigidBodyHandle h) const { return lookup(h,rigidBodies_,refs_.rigidBodies); }
     [[nodiscard]] std::vector<ReferenceSite> allMaterialReferences() const { ensure(); return refs_.allMaterials; }
     [[nodiscard]] Transaction transaction();
 private:
     PmxModel model_; mutable bool dirty_{};
     mutable Table<VertexTag> vertices_; mutable Table<TextureTag> textures_; mutable Table<MaterialTag> materials_; mutable Table<BoneTag> bones_; mutable Table<MorphTag> morphs_; mutable Table<DisplayFrameTag> displayFrames_; mutable Table<RigidBodyTag> rigidBodies_; mutable Table<JointTag> joints_; mutable Table<SoftBodyTag> softBodies_; mutable Table<FaceTag> facesTable_; mutable std::vector<PmxFace> faces_; mutable ReferenceIndex refs_;
     template <typename T,typename Tag> static const T* resolve(const std::vector<T>& values,const Table<Tag>& table,PmxHandle<Tag> h) { const auto i=table.index(h); return i ? &values[*i] : nullptr; }
-    template <typename Tag> std::vector<ReferenceSite> lookup(PmxHandle<Tag> h,const std::unordered_map<std::uint64_t,std::vector<ReferenceSite>>& map) const { ensure(); const auto i=map.find(h.id); return i==map.end()?std::vector<ReferenceSite>{}:i->second; }
+    template <typename Tag> std::vector<ReferenceSite> lookup(PmxHandle<Tag> h,const Table<Tag>& table,const std::unordered_map<std::uint64_t,std::vector<ReferenceSite>>& map) const { ensure(); if(!table.index(h))return {}; const auto i=map.find(h.id); return i==map.end()?std::vector<ReferenceSite>{}:i->second; }
     void ensure() const { if(dirty_) const_cast<PmxDocument*>(this)->rebuildIndexes(); }
     void rebuildIndexes(); void rebuildReferences();
     static void remapBoneReferences(PmxModel& model,const std::vector<std::int32_t>& map);
@@ -110,11 +114,12 @@ class PmxDocument::Transaction {
 public:
     explicit Transaction(PmxDocument& d) : document_(d) { document_.ensure(); model_=d.model_; vertices_=d.vertices_; textures_=d.textures_; materials_=d.materials_; bones_=d.bones_; morphs_=d.morphs_; displayFrames_=d.displayFrames_; rigidBodies_=d.rigidBodies_; joints_=d.joints_; softBodies_=d.softBodies_; facesTable_=d.facesTable_; faces_=d.faces_; }
     [[nodiscard]] BoneHandle addBone(PmxBone bone) { return insertBone(model_.bones.size(),std::move(bone)); }
+    [[nodiscard]] BoneHandle addBone(BoneDraft draft) { draft.value.parent=-1; const auto handle=addBone(std::move(draft.value)); if(handle&&draft.parent&&!setBoneParent(handle,*draft.parent)) { errors_.push_back("invalid bone draft parent"); return {}; } return handle; }
     // References in bone are interpreted as pre-insertion PMX indices. Prefer
     // addBone() followed by handle-based setters for new editor code.
     [[nodiscard]] BoneHandle insertBone(std::size_t destination,PmxBone bone);
     [[nodiscard]] bool renameBone(BoneHandle h,std::string name) { const auto i=bones_.index(h); if(!i) return false; model_.bones[*i].name=std::move(name); return true; }
-    [[nodiscard]] bool setBoneParent(BoneHandle child,BoneHandle parent) { const auto c=bones_.index(child),p=bones_.index(parent); if(!c||!p||*c==*p) return false; for(auto cursor=*p;;) { if(cursor==*c) return false; const auto next=model_.bones[cursor].parent; if(next<0) break; cursor=static_cast<std::size_t>(next); } model_.bones[*c].parent=static_cast<std::int32_t>(*p); return true; }
+    [[nodiscard]] bool setBoneParent(BoneHandle child,BoneHandle parent) { const auto c=bones_.index(child),p=bones_.index(parent); if(!c||!p||*c==*p) return false; std::vector<bool> visited(model_.bones.size()); for(auto cursor=*p;;) { if(cursor>=model_.bones.size()||visited[cursor]||cursor==*c) return false; visited[cursor]=true; const auto next=model_.bones[cursor].parent; if(next<0) break; cursor=static_cast<std::size_t>(next); } model_.bones[*c].parent=static_cast<std::int32_t>(*p); return true; }
     [[nodiscard]] EraseImpact analyzeErase(BoneHandle h) const;
     [[nodiscard]] bool eraseBone(BoneHandle h, ErasePolicy policy = ErasePolicy::rejectIfReferenced);
     [[nodiscard]] bool moveBone(BoneHandle h,std::size_t destination);

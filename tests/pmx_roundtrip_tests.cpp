@@ -71,6 +71,9 @@ int main() {
     const auto root = document.boneHandle(0);
     assert(document.resolve(root) != nullptr);
     assert(document.referencesTo(root).size() == 3);
+    auto staleRoot = root;
+    ++staleRoot.generation;
+    assert(document.referencesTo(staleRoot).empty());
     assert(document.faces().size() == 1);
     assert(document.referencesTo(document.materialHandle(0)).size() == 1);
     assert(document.referencesTo(document.vertexHandle(0)).size() == 1);
@@ -148,6 +151,17 @@ int main() {
     }
     {
         auto shifted = model;
+        shifted.vertices.insert(shifted.vertices.begin(), {.bones = {0, -1, -1, -1}});
+        shifted.indices = {1, 2, 3};
+        shifted.morphs = {{.name = "vertex", .type = 1, .offsets = {{.index = 1}}}};
+        mmd::PmxDocument editable(std::move(shifted));
+        auto transaction = editable.transaction();
+        assert(transaction.eraseVertex(editable.vertexHandle(0)));
+        assert(transaction.commit().committed);
+        assert(editable.model().morphs[0].offsets[0].index == 0);
+    }
+    {
+        auto shifted = model;
         shifted.morphs = {{.name = "unused", .type = 0}, {.name = "shown", .type = 0}};
         shifted.displayFrames = {{.items = {{.bone = false, .index = 1}}}};
         mmd::PmxDocument editable(std::move(shifted));
@@ -178,6 +192,16 @@ int main() {
         assert(editable.model().materials.size() == 1);
         assert(editable.model().materials[0].indexCount == 3);
         assert(editable.model().morphs[0].offsets[0].index == -1);
+    }
+    {
+        auto shifted = model;
+        shifted.materials.insert(shifted.materials.begin(), {.name = "unused"});
+        shifted.morphs = {{.name = "material", .type = 8, .offsets = {{.index = 1}}}};
+        mmd::PmxDocument editable(std::move(shifted));
+        auto transaction = editable.transaction();
+        assert(transaction.eraseMaterial(editable.materialHandle(0)));
+        assert(transaction.commit().committed);
+        assert(editable.model().morphs[0].offsets[0].index == 0);
     }
     {
         mmd::PmxDocument editable(model);
