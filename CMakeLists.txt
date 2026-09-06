@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(libmmd VERSION 0.2.2 LANGUAGES CXX)
+project(libmmd VERSION 0.2.3 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -18,6 +18,7 @@ option(
     "Fetch optional source dependencies when unavailable"
     OFF
 )
+option(LIBMMD_INSTALL "Generate install rules for libmmd" ${PROJECT_IS_TOP_LEVEL})
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -58,6 +59,7 @@ if(LIBMMD_ENABLE_PHYSICS)
     target_link_libraries(mmd_physics PUBLIC mmd_core)
     target_include_directories(mmd_physics PRIVATE src/internal)
     set(LIBMMD_HAS_BULLET 0)
+    set(LIBMMD_BULLET_FETCHED OFF)
     if(LIBMMD_ENABLE_BULLET)
         find_package(Bullet QUIET)
         if(NOT Bullet_FOUND AND LIBMMD_FETCH_DEPENDENCIES)
@@ -80,6 +82,7 @@ if(LIBMMD_ENABLE_PHYSICS)
             set(BULLET_INCLUDE_DIRS "${bullet_SOURCE_DIR}/src")
             set(BULLET_LIBRARIES BulletDynamics BulletCollision LinearMath)
             set(Bullet_FOUND TRUE)
+            set(LIBMMD_BULLET_FETCHED ON)
         endif()
         if(Bullet_FOUND)
             set(LIBMMD_HAS_BULLET 1)
@@ -89,6 +92,18 @@ if(LIBMMD_ENABLE_PHYSICS)
             )
             target_link_libraries(mmd_physics PRIVATE ${BULLET_LIBRARIES})
         endif()
+    endif()
+    if(LIBMMD_INSTALL AND LIBMMD_BULLET_FETCHED)
+        message(
+            FATAL_ERROR
+            "Installing libmmd with a FetchContent-provided Bullet is unsupported. "
+            "Install Bullet system-wide, disable LIBMMD_ENABLE_BULLET, "
+            "or configure with -DLIBMMD_INSTALL=OFF."
+        )
+    endif()
+    set(LIBMMD_CONFIG_NEEDS_BULLET OFF)
+    if(LIBMMD_HAS_BULLET AND NOT LIBMMD_BULLET_FETCHED)
+        set(LIBMMD_CONFIG_NEEDS_BULLET ON)
     endif()
     target_compile_definitions(
         mmd_physics
@@ -101,39 +116,46 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
     add_executable(libmmd_pmx_roundtrip_tests tests/pmx_roundtrip_tests.cpp)
     target_link_libraries(libmmd_pmx_roundtrip_tests PRIVATE mmd::core)
     add_test(NAME pmx_roundtrip COMMAND libmmd_pmx_roundtrip_tests)
+    if(LIBMMD_ENABLE_PHYSICS)
+        add_executable(libmmd_physics_smoke_tests tests/physics_smoke_tests.cpp)
+        target_link_libraries(libmmd_physics_smoke_tests PRIVATE mmd::physics)
+        add_test(NAME physics_smoke COMMAND libmmd_physics_smoke_tests)
+    endif()
 endif()
 
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(
-    TARGETS mmd_core mmd_animation
-    EXPORT libmmdTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
-if(TARGET mmd_physics)
+if(LIBMMD_INSTALL)
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
     install(
-        TARGETS mmd_physics
+        TARGETS mmd_core mmd_animation
         EXPORT libmmdTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
-endif()
-install(
-    EXPORT libmmdTargets
-    NAMESPACE mmd::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmmd
-)
-configure_package_config_file(
-    cmake/libmmdConfig.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfig.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmmd
-)
-write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfigVersion.cmake
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
-)
-install(
-    FILES
+    if(TARGET mmd_physics)
+        install(
+            TARGETS mmd_physics
+            EXPORT libmmdTargets
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        )
+    endif()
+    install(
+        EXPORT libmmdTargets
+        NAMESPACE mmd::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmmd
+    )
+    configure_package_config_file(
+        cmake/libmmdConfig.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmmd
+    )
+    write_basic_package_version_file(
         ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfigVersion.cmake
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmmd
-)
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+    install(
+        FILES
+            ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfig.cmake
+            ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmmd
+    )
+endif()

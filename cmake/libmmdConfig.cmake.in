@@ -1,2 +1,9 @@
 @PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if(@LIBMMD_CONFIG_NEEDS_BULLET@)
+    find_dependency(Bullet)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/libmmdTargets.cmake")
