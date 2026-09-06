@@ -234,6 +234,67 @@ int main() {
         assert(transaction.addSoftBody({.value = {.name = "draft soft"}, .material = material}));
         assert(transaction.commit().committed);
     }
+    {
+        mmd::PmxDocument editable(model);
+        const auto rootBone = editable.boneHandle(0);
+        mmd::BoneDraft draft;
+        draft.value.name = "handle relations";
+        draft.value.flags = static_cast<std::uint16_t>(0x0001U | 0x0020U | 0x0100U);
+        draft.value.parent = 99;
+        draft.value.tailBone = 99;
+        draft.value.inheritParent = 99;
+        draft.value.ikTarget = 99;
+        draft.value.ikLinks = {{.bone = 99}};
+        draft.value.inheritRatio = 0.5F;
+        draft.parent = rootBone;
+        draft.tailBone = rootBone;
+        draft.inheritParent = rootBone;
+        draft.ikTarget = rootBone;
+        draft.ikLinks = {{.bone = rootBone, .limited = true, .minimum = {-1.0F, -2.0F, -3.0F}}};
+        auto transaction = editable.transaction();
+        const auto relationBone = transaction.addBone(std::move(draft));
+        assert(relationBone);
+        const auto result = transaction.commit();
+        assert(result.committed);
+        const auto *stored = editable.resolve(relationBone);
+        assert(stored != nullptr);
+        assert(stored->parent == 0);
+        assert(stored->tailBone == 0);
+        assert(stored->inheritParent == 0);
+        assert(stored->ikTarget == 0);
+        assert(stored->ikLinks.size() == 1);
+        assert(stored->ikLinks[0].bone == 0);
+        assert(stored->ikLinks[0].limited);
+        assert(stored->ikLinks[0].minimum[0] == -1.0F);
+    }
+    {
+        mmd::PmxDocument editable(model);
+        const auto rootBone = editable.boneHandle(0);
+        auto transaction = editable.transaction();
+        const auto relationBone = transaction.addBone({.value = {.name = "editable relations"}});
+        assert(relationBone);
+        assert(transaction.setBoneParent(relationBone, rootBone));
+        assert(transaction.setBoneParent(relationBone, std::nullopt));
+        assert(transaction.setBoneTailBone(relationBone, rootBone));
+        assert(transaction.setBoneTailOffset(relationBone, {1.0F, 2.0F, 3.0F}));
+        assert(transaction.setBoneInherit(relationBone, rootBone, 0.25F, true, false));
+        assert(transaction.setBoneInherit(relationBone, std::nullopt, 0.0F, false, false));
+        assert(transaction.setBoneIkTarget(relationBone, rootBone));
+        assert(transaction.addBoneIkLink(relationBone, {.bone = rootBone}));
+        assert(transaction.eraseBoneIkLink(relationBone, 0));
+        assert(transaction.commit().committed);
+        const auto *stored = editable.resolve(relationBone);
+        assert(stored != nullptr);
+        assert(stored->parent == -1);
+        assert((stored->flags & 0x0001U) == 0);
+        assert(stored->tailBone == -1);
+        assert(stored->tailOffset == (mmd::Float3{1.0F, 2.0F, 3.0F}));
+        assert((stored->flags & 0x0300U) == 0);
+        assert(stored->inheritParent == -1);
+        assert((stored->flags & 0x0020U) != 0);
+        assert(stored->ikTarget == 0);
+        assert(stored->ikLinks.empty());
+    }
 
     std::filesystem::remove(path);
     std::filesystem::remove(preservedPath);
