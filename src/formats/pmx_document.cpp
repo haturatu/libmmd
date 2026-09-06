@@ -177,11 +177,11 @@ void PmxDocument::rebuildReferences() {
                          h.generation, ReferenceField::softBodyAnchorRigidBody, static_cast<std::uint32_t>(n));
     }
     for (std::size_t i = 0; i < faces_.size(); ++i) {
-        const auto owner = facesTable_.at(i);
+        const auto faceOwner = facesTable_.at(i);
         const auto material = faces_[i].material;
         if (material)
             refs_.materials[material.id].push_back(
-                {ReferenceObjectKind::face, owner.id, owner.generation, ReferenceField::faceMaterial, 0});
+                {ReferenceObjectKind::face, faceOwner.id, faceOwner.generation, ReferenceField::faceMaterial, 0});
     }
 }
 
