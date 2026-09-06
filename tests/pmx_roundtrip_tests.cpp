@@ -80,6 +80,27 @@ int main() {
     auto staleRoot = root;
     ++staleRoot.generation;
     assert(document.referencesTo(staleRoot).empty());
+    {
+        mmd::PmxDocument foreignDocument(model);
+        mmd::PmxDocument localDocument(model);
+        const auto foreignRoot = foreignDocument.boneHandle(0);
+        const auto localRoot = localDocument.boneHandle(0);
+        assert(foreignRoot.domain != localRoot.domain);
+        assert(localDocument.referencesTo(foreignRoot).empty());
+        auto transaction = localDocument.transaction();
+        assert(!transaction.setBoneParent(localRoot, foreignRoot));
+        assert(!transaction.setBoneTailBone(localRoot, foreignRoot));
+        assert(!transaction.setBoneInherit(localRoot, foreignRoot, 1.0F, true, false));
+        assert(!transaction.setBoneIkTarget(localRoot, foreignRoot));
+        assert(!transaction.addBoneIkLink(localRoot, {.bone = foreignRoot}));
+        assert(transaction.commit().committed);
+        mmd::BoneDraft foreignDraft;
+        foreignDraft.value.name = "foreign parent";
+        foreignDraft.parent = foreignRoot;
+        auto draftTransaction = localDocument.transaction();
+        assert(!draftTransaction.addBone(std::move(foreignDraft)));
+        assert(!draftTransaction.commit().committed);
+    }
     assert(document.faces().size() == 1);
     assert(document.referencesTo(document.materialHandle(0)).size() == 1);
     assert(document.referencesTo(document.vertexHandle(0)).size() == 1);
@@ -233,6 +254,120 @@ int main() {
         assert(transaction.addJoint({.value = {.name = "draft joint"}, .bodyA = body, .bodyB = body}));
         assert(transaction.addSoftBody({.value = {.name = "draft soft"}, .material = material}));
         assert(transaction.commit().committed);
+    }
+    {
+        mmd::PmxDocument editable(model);
+        const auto rootBone = editable.boneHandle(0);
+        mmd::BoneDraft draft;
+        draft.value.name = "handle relations";
+        draft.value.flags = static_cast<std::uint16_t>(0x0001U | 0x0020U | 0x0100U);
+        draft.value.parent = 99;
+        draft.value.tailBone = 99;
+        draft.value.inheritParent = 99;
+        draft.value.ikTarget = 99;
+        draft.value.ikLinks = {{.bone = 99}};
+        draft.value.inheritRatio = 0.5F;
+        draft.parent = rootBone;
+        draft.tailBone = rootBone;
+        draft.inheritParent = rootBone;
+        draft.ikTarget = rootBone;
+        draft.ikLinks = {{.bone = rootBone, .limited = true, .minimum = {-1.0F, -2.0F, -3.0F}}};
+        auto transaction = editable.transaction();
+        const auto relationBone = transaction.addBone(std::move(draft));
+        assert(relationBone);
+        const auto result = transaction.commit();
+        assert(result.committed);
+        const auto *stored = editable.resolve(relationBone);
+        assert(stored != nullptr);
+        assert(stored->parent == 0);
+        assert(stored->tailBone == 0);
+        assert(stored->inheritParent == 0);
+        assert(stored->ikTarget == 0);
+        assert(stored->ikLinks.size() == 1);
+        assert(stored->ikLinks[0].bone == 0);
+        assert(stored->ikLinks[0].limited);
+        assert(stored->ikLinks[0].minimum[0] == -1.0F);
+    }
+    {
+        mmd::PmxDocument editable(model);
+        const auto rootBone = editable.boneHandle(0);
+        auto transaction = editable.transaction();
+        const auto relationBone = transaction.addBone({.value = {.name = "editable relations"}});
+        assert(relationBone);
+        assert(transaction.setBoneParent(relationBone, rootBone));
+        assert(transaction.setBoneParent(relationBone, std::nullopt));
+        assert(transaction.setBoneTailBone(relationBone, rootBone));
+        assert(transaction.setBoneTailOffset(relationBone, {1.0F, 2.0F, 3.0F}));
+        assert(transaction.setBoneInherit(relationBone, rootBone, 0.25F, true, false));
+        assert(transaction.setBoneInherit(relationBone, std::nullopt, 0.0F, false, false));
+        assert(transaction.setBoneIkTarget(relationBone, rootBone));
+        assert(transaction.addBoneIkLink(relationBone, {.bone = rootBone}));
+        assert(transaction.eraseBoneIkLink(relationBone, 0));
+        assert(transaction.setBoneIkTarget(relationBone, std::nullopt));
+        assert(transaction.commit().committed);
+        const auto *stored = editable.resolve(relationBone);
+        assert(stored != nullptr);
+        assert(stored->parent == -1);
+        assert((stored->flags & 0x0001U) == 0);
+        assert(stored->tailBone == -1);
+        assert(stored->tailOffset == (mmd::Float3{1.0F, 2.0F, 3.0F}));
+        assert((stored->flags & 0x0300U) == 0);
+        assert(stored->inheritParent == -1);
+        assert((stored->flags & 0x0020U) == 0);
+        assert(stored->ikTarget == -1);
+        assert(stored->ikLinks.empty());
+    }
+    {
+        auto staleIk = model;
+        staleIk.bones.push_back({.name = "stale IK", .ikLinks = {{.bone = 0}}});
+        mmd::PmxDocument editable(std::move(staleIk));
+        auto transaction = editable.transaction();
+        assert(transaction.setBoneIkTarget(editable.boneHandle(1), editable.boneHandle(0)));
+        assert(transaction.commit().committed);
+        assert((editable.model().bones[1].flags & 0x0020U) != 0);
+        assert(editable.model().bones[1].ikTarget == 0);
+        assert(editable.model().bones[1].ikLinks.empty());
+    }
+    {
+        mmd::PmxDocument editable(model);
+        auto transaction = editable.transaction();
+        mmd::BoneDraft invalid;
+        invalid.value.name = "mismatched tail";
+        invalid.value.flags = 0x0001U;
+        assert(!transaction.addBone(std::move(invalid)));
+        const auto result = transaction.commit();
+        assert(!result.committed);
+        assert(!result.errors.empty());
+    }
+    {
+        auto twoBones = model;
+        twoBones.bones.push_back({.name = "second"});
+        mmd::PmxDocument editable(std::move(twoBones));
+        const auto first = editable.boneHandle(0);
+        const auto second = editable.boneHandle(1);
+        auto transaction = editable.transaction();
+        assert(transaction.setBoneParent(first, second));
+        assert(!transaction.setBoneInherit(second, first, 1.0F, true, false));
+        assert(transaction.commit().committed);
+    }
+    {
+        auto twoBones = model;
+        twoBones.bones.push_back({.name = "second"});
+        mmd::PmxDocument editable(std::move(twoBones));
+        const auto first = editable.boneHandle(0);
+        const auto second = editable.boneHandle(1);
+        auto transaction = editable.transaction();
+        assert(transaction.setBoneInherit(first, second, 1.0F, true, false));
+        assert(!transaction.setBoneParent(second, first));
+        assert(transaction.commit().committed);
+    }
+    {
+        auto mixedCycle = model;
+        mixedCycle.bones.push_back({.name = "second"});
+        mixedCycle.bones[0].parent = 1;
+        mixedCycle.bones[1].flags = 0x0100U;
+        mixedCycle.bones[1].inheritParent = 0;
+        assert(!mmd::pmx::validate(mixedCycle).valid());
     }
 
     std::filesystem::remove(path);

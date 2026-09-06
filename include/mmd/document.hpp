@@ -14,10 +14,12 @@
 namespace mmd {
 
 template <typename Tag> struct PmxHandle {
+    // Handles are only valid in the document that issued their domain.
+    std::uint64_t domain{};
     std::uint64_t id{};
     std::uint32_t generation{};
     [[nodiscard]] explicit constexpr operator bool() const noexcept {
-        return id != 0;
+        return domain != 0 && id != 0;
     }
     auto operator<=>(const PmxHandle &) const = default;
 };
@@ -104,9 +106,22 @@ struct VertexEraseImpact {
         return faces + morphOffsets + softBodyAnchors + pinnedVertices;
     }
 };
+struct BoneIkLinkDraft {
+    BoneHandle bone;
+    bool limited{};
+    Float3 minimum{};
+    Float3 maximum{};
+};
 struct BoneDraft {
     PmxBone value;
     std::optional<BoneHandle> parent;
+    std::optional<BoneHandle> tailBone;
+    std::optional<BoneHandle> inheritParent;
+    std::optional<BoneHandle> ikTarget;
+    std::vector<BoneIkLinkDraft> ikLinks;
+    // All bone-index fields in value are ignored and rebuilt from these
+    // handles. The reference-related bits in value.flags must agree with the
+    // optional handles and links.
 };
 struct RigidBodyDraft {
     PmxRigidBody value;
@@ -134,6 +149,7 @@ class PmxDocument {
         std::uint32_t generation{1};
     };
     template <typename Tag> struct Table {
+        std::uint64_t domain{};
         std::uint64_t nextId{1};
         std::vector<Slot<Tag>> slots;
         mutable std::unordered_map<std::uint64_t, std::size_t> indexById;
@@ -151,9 +167,11 @@ class PmxDocument {
             rebuildIndex();
         }
         [[nodiscard]] PmxHandle<Tag> at(std::size_t i) const {
-            return i < slots.size() ? PmxHandle<Tag>{slots[i].id, slots[i].generation} : PmxHandle<Tag>{};
+            return i < slots.size() ? PmxHandle<Tag>{domain, slots[i].id, slots[i].generation} : PmxHandle<Tag>{};
         }
         [[nodiscard]] std::optional<std::size_t> index(PmxHandle<Tag> h) const {
+            if (h.domain != domain)
+                return std::nullopt;
             auto found = indexById.find(h.id);
             if (found != indexById.end() && found->second < slots.size() && slots[found->second].id == h.id &&
                 slots[found->second].generation == h.generation)
@@ -162,7 +180,8 @@ class PmxDocument {
                 rebuildIndex();
                 found = indexById.find(h.id);
             }
-            if (found == indexById.end() || slots[found->second].generation != h.generation)
+            if (found == indexById.end() || slots[found->second].id != h.id ||
+                slots[found->second].generation != h.generation)
                 return std::nullopt;
             return found->second;
         }
@@ -199,12 +218,10 @@ class PmxDocument {
 
   public:
     class Transaction;
-    PmxDocument() {
-        rebuildIndexes();
-    }
-    explicit PmxDocument(PmxModel model) : model_(std::move(model)) {
-        rebuildIndexes();
-    }
+    PmxDocument();
+    explicit PmxDocument(PmxModel model);
+    PmxDocument(const PmxDocument &other);
+    PmxDocument &operator=(const PmxDocument &other);
     [[nodiscard]] const PmxModel &model() const noexcept {
         return model_;
     }
@@ -324,6 +341,7 @@ class PmxDocument {
 
   private:
     PmxModel model_;
+    std::uint64_t domain_{};
     mutable bool dirty_{};
     mutable Table<VertexTag> vertices_;
     mutable Table<TextureTag> textures_;
@@ -337,6 +355,7 @@ class PmxDocument {
     mutable Table<FaceTag> facesTable_;
     mutable std::vector<PmxFace> faces_;
     mutable ReferenceIndex refs_;
+    static std::uint64_t allocateDomain() noexcept;
     template <typename T, typename Tag>
     static const T *resolve(const std::vector<T> &values, const Table<Tag> &table, PmxHandle<Tag> h) {
         const auto i = table.index(h);
@@ -381,17 +400,9 @@ class PmxDocument::Transaction {
     [[nodiscard]] BoneHandle addBone(PmxBone bone) {
         return insertBone(model_.bones.size(), std::move(bone));
     }
-    [[nodiscard]] BoneHandle addBone(BoneDraft draft) {
-        draft.value.parent = -1;
-        const auto handle = addBone(std::move(draft.value));
-        if (handle && draft.parent && !setBoneParent(handle, *draft.parent)) {
-            errors_.push_back("invalid bone draft parent");
-            return {};
-        }
-        return handle;
-    }
-    // References in bone are interpreted as pre-insertion PMX indices. Prefer
-    // addBone() followed by handle-based setters for new editor code.
+    [[nodiscard]] BoneHandle addBone(BoneDraft draft);
+    // Low-level DTO insertion. References in bone are interpreted as
+    // pre-insertion PMX indices; use BoneDraft for editor-facing code.
     [[nodiscard]] BoneHandle insertBone(std::size_t destination, PmxBone bone);
     [[nodiscard]] bool renameBone(BoneHandle h, std::string name) {
         const auto i = bones_.index(h);
@@ -400,23 +411,15 @@ class PmxDocument::Transaction {
         model_.bones[*i].name = std::move(name);
         return true;
     }
-    [[nodiscard]] bool setBoneParent(BoneHandle child, BoneHandle parent) {
-        const auto c = bones_.index(child), p = bones_.index(parent);
-        if (!c || !p || *c == *p)
-            return false;
-        std::vector<bool> visited(model_.bones.size());
-        for (auto cursor = *p;;) {
-            if (cursor >= model_.bones.size() || visited[cursor] || cursor == *c)
-                return false;
-            visited[cursor] = true;
-            const auto next = model_.bones[cursor].parent;
-            if (next < 0)
-                break;
-            cursor = static_cast<std::size_t>(next);
-        }
-        model_.bones[*c].parent = static_cast<std::int32_t>(*p);
-        return true;
-    }
+    [[nodiscard]] bool setBoneParent(BoneHandle child, std::optional<BoneHandle> parent);
+    [[nodiscard]] bool setBoneTailBone(BoneHandle bone, BoneHandle target);
+    [[nodiscard]] bool setBoneTailOffset(BoneHandle bone, Float3 offset);
+    [[nodiscard]] bool setBoneInherit(BoneHandle bone, std::optional<BoneHandle> parent, float ratio, bool rotation,
+                                      bool translation);
+    // Passing nullopt disables IK and discards any serialized IK links.
+    [[nodiscard]] bool setBoneIkTarget(BoneHandle bone, std::optional<BoneHandle> target);
+    [[nodiscard]] bool addBoneIkLink(BoneHandle bone, BoneIkLinkDraft link);
+    [[nodiscard]] bool eraseBoneIkLink(BoneHandle bone, std::size_t index);
     [[nodiscard]] EraseImpact analyzeErase(BoneHandle h) const;
     [[nodiscard]] bool eraseBone(BoneHandle h, ErasePolicy policy = ErasePolicy::rejectIfReferenced);
     [[nodiscard]] bool moveBone(BoneHandle h, std::size_t destination);
