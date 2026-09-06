@@ -534,7 +534,7 @@ std::filesystem::path pmx::resolveTexturePath(const PmxModel &model, std::size_t
         throw std::out_of_range("PMX texture index is out of range");
     auto stored = model.textures[textureIndex].storedPath;
     std::replace(stored.begin(), stored.end(), '\\', '/');
-    return (model.sourcePath.parent_path() / std::filesystem::u8path(stored)).lexically_normal();
+    return (model.sourcePath.parent_path() / std::filesystem::path(stored)).lexically_normal();
 }
 
 } // namespace mmd
