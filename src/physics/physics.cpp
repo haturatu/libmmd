@@ -43,11 +43,11 @@ struct MmdPhysics::Impl {
     ~Impl() {
         if (world == nullptr)
             return;
-        for (auto& constraint : constraints)
+        for (auto &constraint : constraints)
             world->removeConstraint(constraint.get());
         if (floorBody != nullptr)
             world->removeRigidBody(floorBody.get());
-        for (auto& body : bodies)
+        for (auto &body : bodies)
             world->removeRigidBody(body.get());
     }
 #endif
@@ -56,56 +56,56 @@ struct MmdPhysics::Impl {
 #if LIBMMD_HAS_BULLET
 namespace {
 
-btVector3 vector(const Float3& value) {
+btVector3 vector(const Float3 &value) {
     return {value[0], value[1], value[2]};
 }
-Float3 vector(const btVector3& value) {
+Float3 vector(const btVector3 &value) {
     return {value.x(), value.y(), value.z()};
 }
 
-bool finite(const Float3& value) {
+bool finite(const Float3 &value) {
     return std::ranges::all_of(value, [](float component) { return std::isfinite(component); });
 }
 
-btQuaternion rotation(const Float3& euler) {
+btQuaternion rotation(const Float3 &euler) {
     btQuaternion value;
     value.setEulerZYX(euler[2], euler[1], euler[0]);
     return value;
 }
 
-btTransform transform(const Float3& position, const Float3& euler) {
+btTransform transform(const Float3 &position, const Float3 &euler) {
     return btTransform(rotation(euler), vector(position));
 }
 
-btTransform transform(const PhysicsTransform& value) {
+btTransform transform(const PhysicsTransform &value) {
     return btTransform(btQuaternion(value.rotation[0], value.rotation[1], value.rotation[2], value.rotation[3]),
                        vector(value.position));
 }
 
-btTransform interpolate(const btTransform& from, const btTransform& to, btScalar amount) {
+btTransform interpolate(const btTransform &from, const btTransform &to, btScalar amount) {
     const auto rotation = from.getRotation().slerp(to.getRotation(), amount);
     const auto position = from.getOrigin() * (1.0F - amount) + to.getOrigin() * amount;
     return btTransform(rotation, position);
 }
 
-bool finite(const PhysicsTransform& value) {
+bool finite(const PhysicsTransform &value) {
     return std::ranges::all_of(value.position, [](float component) { return std::isfinite(component); }) &&
            std::ranges::all_of(value.rotation, [](float component) { return std::isfinite(component); });
 }
 
-PhysicsTransform transform(const btTransform& value) {
-    const auto& q = value.getRotation();
+PhysicsTransform transform(const btTransform &value) {
+    const auto &q = value.getRotation();
     return {vector(value.getOrigin()), {q.x(), q.y(), q.z(), q.w()}};
 }
 
 } // namespace
 #endif
 
-MmdPhysics::MmdPhysics(const PmxModel& model) : impl_(std::make_unique<Impl>()) {
-    const auto finiteValues = [](const auto& values) {
+MmdPhysics::MmdPhysics(const PmxModel &model) : impl_(std::make_unique<Impl>()) {
+    const auto finiteValues = [](const auto &values) {
         return std::ranges::all_of(values, [](const float value) { return std::isfinite(value); });
     };
-    for (const auto& source : model.rigidBodies) {
+    for (const auto &source : model.rigidBodies) {
         if (!finiteValues(source.size) || !finiteValues(source.position) || !finiteValues(source.rotation) ||
             !std::isfinite(source.mass) || !std::isfinite(source.linearDamping) ||
             !std::isfinite(source.angularDamping) || !std::isfinite(source.restitution) ||
@@ -129,7 +129,7 @@ MmdPhysics::MmdPhysics(const PmxModel& model) : impl_(std::make_unique<Impl>()) 
     impl_->kinematicDirty.reserve(model.rigidBodies.size());
     impl_->modes.reserve(model.rigidBodies.size());
     impl_->constraintEndpointsUsable.reserve(model.rigidBodies.size());
-    for (const auto& source : model.rigidBodies) {
+    for (const auto &source : model.rigidBodies) {
         const auto validDimension = [](float value) { return std::isfinite(value) && std::abs(value) >= 0.001F; };
         bool invalidShape = !source.physicsEnabled;
         if (!invalidShape) {
@@ -220,7 +220,7 @@ MmdPhysics::MmdPhysics(const PmxModel& model) : impl_(std::make_unique<Impl>()) 
         impl_->world->addRigidBody(impl_->bodies.back().get(), group, mask);
     }
     impl_->constraints.reserve(model.joints.size());
-    for (const auto& source : model.joints) {
+    for (const auto &source : model.joints) {
         if (!source.physicsEnabled || source.type != 0 || source.bodyA < 0 || source.bodyB < 0 ||
             source.bodyA == source.bodyB || static_cast<std::size_t>(source.bodyA) >= impl_->bodies.size() ||
             static_cast<std::size_t>(source.bodyB) >= impl_->bodies.size())
@@ -229,8 +229,8 @@ MmdPhysics::MmdPhysics(const PmxModel& model) : impl_(std::make_unique<Impl>()) 
         const auto bodyBIndex = static_cast<std::size_t>(source.bodyB);
         if (impl_->constraintEndpointsUsable[bodyAIndex] == 0 || impl_->constraintEndpointsUsable[bodyBIndex] == 0)
             continue;
-        const auto& bodyA = impl_->bodies[bodyAIndex];
-        const auto& bodyB = impl_->bodies[bodyBIndex];
+        const auto &bodyA = impl_->bodies[bodyAIndex];
+        const auto &bodyB = impl_->bodies[bodyBIndex];
         // Bullet cannot solve a 6DoF row when neither endpoint has inverse
         // mass. A number of PMX files contain decorative static-static joints.
         if (bodyA->getInvMass() <= 0.0F && bodyB->getInvMass() <= 0.0F)
@@ -270,17 +270,17 @@ MmdPhysics::MmdPhysics(const PmxModel& model) : impl_(std::make_unique<Impl>()) 
 }
 
 MmdPhysics::~MmdPhysics() = default;
-MmdPhysics::MmdPhysics(MmdPhysics&&) noexcept = default;
-MmdPhysics& MmdPhysics::operator=(MmdPhysics&&) noexcept = default;
+MmdPhysics::MmdPhysics(MmdPhysics &&) noexcept = default;
+MmdPhysics &MmdPhysics::operator=(MmdPhysics &&) noexcept = default;
 
-SoftBodySimulation::SoftBodySimulation(const PmxModel& model)
+SoftBodySimulation::SoftBodySimulation(const PmxModel &model)
     : initial_(model.vertices.size()), positions_(model.vertices.size()), velocities_(model.vertices.size()),
       pinned_(model.vertices.size()) {
     for (std::size_t index = 0; index < model.vertices.size(); ++index) {
         initial_[index] = model.vertices[index].position;
         positions_[index] = initial_[index];
     }
-    for (const auto& softBody : model.softBodies) {
+    for (const auto &softBody : model.softBodies) {
         if (softBody.material < 0 || static_cast<std::size_t>(softBody.material) >= model.materials.size())
             continue;
         std::size_t firstIndex = 0;
@@ -312,7 +312,7 @@ void SoftBodySimulation::reset() {
     std::fill(velocities_.begin(), velocities_.end(), Float3{});
 }
 
-void SoftBodySimulation::step(float deltaSeconds, const Float3& gravity) {
+void SoftBodySimulation::step(float deltaSeconds, const Float3 &gravity) {
     if (!available() || deltaSeconds <= 0.0F)
         return;
     const float dt = std::min(deltaSeconds, 0.05F);
@@ -446,7 +446,7 @@ void MmdPhysics::step(float deltaSeconds) {
 #endif
 }
 
-void MmdPhysics::setGravity(const Float3& gravity) {
+void MmdPhysics::setGravity(const Float3 &gravity) {
 #if LIBMMD_HAS_BULLET
     impl_->gravity = gravity;
     impl_->world->setGravity(vector(gravity));
@@ -488,7 +488,7 @@ void MmdPhysics::setFloorCollision(bool enabled) {
 #endif
 }
 
-void MmdPhysics::setKinematicTransform(std::size_t body, const PhysicsTransform& value) {
+void MmdPhysics::setKinematicTransform(std::size_t body, const PhysicsTransform &value) {
 #if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
@@ -506,14 +506,14 @@ void MmdPhysics::setKinematicTransform(std::size_t body, const PhysicsTransform&
 #endif
 }
 
-void MmdPhysics::teleportBody(std::size_t body, const PhysicsTransform& value) {
+void MmdPhysics::teleportBody(std::size_t body, const PhysicsTransform &value) {
 #if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
     if (!finite(value))
         return;
     const auto world = transform(value);
-    auto& rigidBody = impl_->bodies[body];
+    auto &rigidBody = impl_->bodies[body];
     rigidBody->setWorldTransform(world);
     rigidBody->getMotionState()->setWorldTransform(world);
     rigidBody->setInterpolationWorldTransform(world);
@@ -533,14 +533,14 @@ void MmdPhysics::teleportBody(std::size_t body, const PhysicsTransform& value) {
 #endif
 }
 
-void MmdPhysics::applyImpulse(std::size_t body, const Float3& linear, const Float3& angular, bool local) {
+void MmdPhysics::applyImpulse(std::size_t body, const Float3 &linear, const Float3 &angular, bool local) {
 #if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
     auto linearValue = vector(linear);
     auto angularValue = vector(angular);
     if (local) {
-        const auto& basis = impl_->bodies[body]->getWorldTransform().getBasis();
+        const auto &basis = impl_->bodies[body]->getWorldTransform().getBasis();
         linearValue = basis * linearValue;
         angularValue = basis * angularValue;
     }

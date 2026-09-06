@@ -1,0 +1,49 @@
+name: Fuzzing
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pmx-parser:
+    name: Fuzzing / PMX parser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y clang ninja-build
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++
+          -DLIBMMD_BUILD_TESTS=OFF
+          -DLIBMMD_INSTALL=OFF
+          -DLIBMMD_ENABLE_PHYSICS=OFF
+          -DLIBMMD_ENABLE_BULLET=OFF
+          -DLIBMMD_BUILD_FUZZERS=ON
+
+      - name: Build
+        run: cmake --build build --target libmmd_pmx_fuzzer --parallel
+
+      - name: Smoke fuzz on pull requests
+        if: github.event_name == 'pull_request'
+        run: ./build/libmmd_pmx_fuzzer -max_total_time=20 -detect_leaks=1
+
+      - name: Nightly fuzzing
+        if: github.event_name != 'pull_request'
+        run: ./build/libmmd_pmx_fuzzer -max_total_time=180 -detect_leaks=1

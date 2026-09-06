@@ -1,0 +1,13 @@
+Checks: >-
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -bugprone-easily-swappable-parameters,
+  -performance-enum-size,
+  -performance-no-int-to-ptr,
+  -portability-avoid-pragma-once
+WarningsAsErrors: "clang-diagnostic-*"
+HeaderFilterRegex: "(^|/)(include|src)/mmd/.*"
+FormatStyle: file

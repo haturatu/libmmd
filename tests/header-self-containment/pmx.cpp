@@ -1,3 +1,3 @@
-#pragma once
-
 #include <mmd/pmx.hpp>
+
+int main() {}
