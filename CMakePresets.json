@@ -1,0 +1,75 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "ci-linux-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "LIBMMD_BUILD_TESTS": "ON",
+        "LIBMMD_INSTALL": "ON",
+        "LIBMMD_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "ci-gcc-debug",
+      "displayName": "GCC Debug with system Bullet",
+      "inherits": "ci-linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "g++",
+        "LIBMMD_ENABLE_PHYSICS": "ON",
+        "LIBMMD_ENABLE_BULLET": "ON"
+      }
+    },
+    {
+      "name": "ci-clang-debug",
+      "displayName": "Clang Debug with system Bullet",
+      "inherits": "ci-linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "LIBMMD_ENABLE_PHYSICS": "ON",
+        "LIBMMD_ENABLE_BULLET": "ON"
+      }
+    },
+    {
+      "name": "ci-gcc-release",
+      "displayName": "GCC Release with system Bullet",
+      "inherits": "ci-linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "g++",
+        "LIBMMD_ENABLE_PHYSICS": "ON",
+        "LIBMMD_ENABLE_BULLET": "ON"
+      }
+    },
+    {
+      "name": "ci-gcc-no-physics",
+      "displayName": "GCC Debug without physics",
+      "inherits": "ci-linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "g++",
+        "LIBMMD_ENABLE_PHYSICS": "OFF",
+        "LIBMMD_ENABLE_BULLET": "OFF"
+      }
+    },
+    {
+      "name": "ci-gcc-fetch-bullet",
+      "displayName": "GCC Debug with FetchContent Bullet",
+      "inherits": "ci-linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "g++",
+        "LIBMMD_INSTALL": "OFF",
+        "LIBMMD_ENABLE_PHYSICS": "ON",
+        "LIBMMD_ENABLE_BULLET": "ON",
+        "LIBMMD_FETCH_DEPENDENCIES": "ON"
+      }
+    }
+  ]
+}

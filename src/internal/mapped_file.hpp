@@ -9,18 +9,18 @@ namespace mmd {
 
 class MappedFileStream final : public std::istream {
   public:
-    explicit MappedFileStream(const std::filesystem::path& path);
+    explicit MappedFileStream(const std::filesystem::path &path);
     ~MappedFileStream() override;
-    MappedFileStream(const MappedFileStream&) = delete;
-    MappedFileStream& operator=(const MappedFileStream&) = delete;
+    MappedFileStream(const MappedFileStream &) = delete;
+    MappedFileStream &operator=(const MappedFileStream &) = delete;
 
   private:
     class Buffer final : public std::streambuf {
       public:
-        explicit Buffer(const std::filesystem::path& path);
+        explicit Buffer(const std::filesystem::path &path);
         ~Buffer() override;
-        Buffer(const Buffer&) = delete;
-        Buffer& operator=(const Buffer&) = delete;
+        Buffer(const Buffer &) = delete;
+        Buffer &operator=(const Buffer &) = delete;
 
       private:
         [[nodiscard]] std::size_t size() const noexcept;
@@ -28,7 +28,7 @@ class MappedFileStream final : public std::istream {
         pos_type seekpos(pos_type position, std::ios_base::openmode which) override;
         void close() noexcept;
 
-        const char* mapped_{nullptr};
+        const char *mapped_{nullptr};
         std::size_t mappedSize_{};
         int fileDescriptor_{-1};
         std::vector<char> fallback_;

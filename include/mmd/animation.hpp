@@ -55,28 +55,28 @@ struct MotionCompatibility {
 
 class MmdAnimator {
   public:
-    explicit MmdAnimator(const PmxModel& model);
+    explicit MmdAnimator(const PmxModel &model);
     ~MmdAnimator();
 
-    void setMotion(const VmdMotion* motion);
-    void setPose(const VpdPose* pose);
-    void setPhysics(MmdPhysics* physics);
+    void setMotion(const VmdMotion *motion);
+    void setPose(const VpdPose *pose);
+    void setPhysics(MmdPhysics *physics);
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
     [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false);
 
   private:
     struct Impl;
-    const PmxModel& model_;
-    const VmdMotion* motion_{};
-    const VpdPose* pose_{};
-    MmdPhysics* physics_{};
+    const PmxModel &model_;
+    const VmdMotion *motion_{};
+    const VpdPose *pose_{};
+    MmdPhysics *physics_{};
     float previousFrame_{-1.0F};
     std::unique_ptr<Impl> impl_;
 };
 
 // Applies one stable model-space transform so animated vertices remain framed.
-void normalizeForPreview(std::vector<PmxVertex>& vertices, const PreviewNormalization& normalization);
-[[nodiscard]] PreviewNormalization previewNormalization(const PmxModel& model);
+void normalizeForPreview(std::vector<PmxVertex> &vertices, const PreviewNormalization &normalization);
+[[nodiscard]] PreviewNormalization previewNormalization(const PmxModel &model);
 
 namespace animation {
 using Animator = MmdAnimator;

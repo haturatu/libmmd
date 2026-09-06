@@ -1,0 +1,6 @@
+/build/
+/build-*/
+/install/
+/.cache/
+/.venv/
+compile_commands.json

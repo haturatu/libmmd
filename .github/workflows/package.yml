@@ -1,0 +1,134 @@
+name: Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  installed-consumer:
+    name: Package / installed consumer / ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: system-bullet
+            physics: ON
+            bullet: ON
+            consumer_physics: ON
+          - name: no-bullet
+            physics: ON
+            bullet: OFF
+            consumer_physics: ON
+          - name: no-physics
+            physics: OFF
+            bullet: OFF
+            consumer_physics: OFF
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libbullet-dev ninja-build
+
+      - name: Build and install libmmd
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBMMD_BUILD_TESTS=ON \
+            -DLIBMMD_INSTALL=ON \
+            -DLIBMMD_ENABLE_PHYSICS="${{ matrix.physics }}" \
+            -DLIBMMD_ENABLE_BULLET="${{ matrix.bullet }}"
+          cmake --build build --parallel
+          cmake --install build --prefix "$GITHUB_WORKSPACE/install"
+
+      - name: Configure installed consumer
+        shell: bash
+        run: |
+          cmake -S tests/package-consumer -B build-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/install" \
+            -DLIBMMD_CONSUMER_WITH_PHYSICS="${{ matrix.consumer_physics }}"
+
+      - name: Build and test installed consumer
+        run: |
+          cmake --build build-consumer --parallel
+          ctest --test-dir build-consumer --output-on-failure --parallel 2
+
+  subproject-consumer:
+    name: Package / FetchContent consumer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ninja-build
+
+      - name: Configure subproject consumer
+        run: >-
+          cmake -S tests/subproject-consumer -B build-subproject -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DLIBMMD_SOURCE_DIR="$GITHUB_WORKSPACE"
+
+      - name: Build and test subproject consumer
+        run: |
+          cmake --build build-subproject --parallel
+          ctest --test-dir build-subproject --output-on-failure --parallel 2
+
+  bullet-dependency-modes:
+    name: Package / Bullet dependency modes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ninja-build
+
+      - name: Build with FetchContent Bullet without install rules
+        shell: bash
+        run: |
+          cmake -S . -B build-fetch -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DLIBMMD_BUILD_TESTS=ON \
+            -DLIBMMD_INSTALL=OFF \
+            -DLIBMMD_ENABLE_PHYSICS=ON \
+            -DLIBMMD_ENABLE_BULLET=ON \
+            -DLIBMMD_FETCH_DEPENDENCIES=ON
+          cmake --build build-fetch --parallel
+          ctest --test-dir build-fetch --output-on-failure --parallel 2
+
+      - name: Verify FetchContent Bullet install guard
+        shell: bash
+        run: |
+          set +e
+          cmake -S . -B build-fetch-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DLIBMMD_BUILD_TESTS=OFF \
+            -DLIBMMD_INSTALL=ON \
+            -DLIBMMD_ENABLE_PHYSICS=ON \
+            -DLIBMMD_ENABLE_BULLET=ON \
+            -DLIBMMD_FETCH_DEPENDENCIES=ON 2>&1 | tee fetch-install.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F "Installing libmmd with a FetchContent-provided Bullet is unsupported" fetch-install.log

@@ -130,22 +130,28 @@ struct VpdPose {
 
 [[nodiscard]] std::string decodeCp932(std::string_view input);
 [[nodiscard]] std::string encodeCp932(std::string_view input);
-[[nodiscard]] VmdMotion loadVmd(const std::filesystem::path& path);
-void saveVmd(const std::filesystem::path& path, const VmdMotion& motion);
-[[nodiscard]] VpdPose loadVpd(const std::filesystem::path& path);
-[[nodiscard]] MotionDocument toMotionDocument(const VmdMotion& motion);
+[[nodiscard]] VmdMotion loadVmd(const std::filesystem::path &path);
+void saveVmd(const std::filesystem::path &path, const VmdMotion &motion);
+[[nodiscard]] VpdPose loadVpd(const std::filesystem::path &path);
+[[nodiscard]] MotionDocument toMotionDocument(const VmdMotion &motion);
 [[nodiscard]] VmdMotion toVmdMotion(MotionDocument document, std::string modelName = {});
-[[nodiscard]] VmdCameraState evaluateCamera(const VmdMotion& motion, float frame);
-[[nodiscard]] VmdLightKey evaluateLight(const VmdMotion& motion, float frame);
+[[nodiscard]] VmdCameraState evaluateCamera(const VmdMotion &motion, float frame);
+[[nodiscard]] VmdLightKey evaluateLight(const VmdMotion &motion, float frame);
 [[nodiscard]] float catmullRom(float p0, float p1, float p2, float p3, float t) noexcept;
 
 namespace vmd {
-[[nodiscard]] inline VmdMotion load(const std::filesystem::path& path) { return loadVmd(path); }
-inline void save(const std::filesystem::path& path, const VmdMotion& motion) { saveVmd(path, motion); }
+[[nodiscard]] inline VmdMotion load(const std::filesystem::path &path) {
+    return loadVmd(path);
+}
+inline void save(const std::filesystem::path &path, const VmdMotion &motion) {
+    saveVmd(path, motion);
+}
 } // namespace vmd
 
 namespace vpd {
-[[nodiscard]] inline VpdPose load(const std::filesystem::path& path) { return loadVpd(path); }
+[[nodiscard]] inline VpdPose load(const std::filesystem::path &path) {
+    return loadVpd(path);
+}
 } // namespace vpd
 
 } // namespace mmd

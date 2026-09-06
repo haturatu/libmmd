@@ -16,12 +16,12 @@ struct PhysicsTransform {
 
 class MmdPhysics {
   public:
-    explicit MmdPhysics(const PmxModel& model);
+    explicit MmdPhysics(const PmxModel &model);
     ~MmdPhysics();
-    MmdPhysics(MmdPhysics&&) noexcept;
-    MmdPhysics& operator=(MmdPhysics&&) noexcept;
-    MmdPhysics(const MmdPhysics&) = delete;
-    MmdPhysics& operator=(const MmdPhysics&) = delete;
+    MmdPhysics(MmdPhysics &&) noexcept;
+    MmdPhysics &operator=(MmdPhysics &&) noexcept;
+    MmdPhysics(const MmdPhysics &) = delete;
+    MmdPhysics &operator=(const MmdPhysics &) = delete;
 
     [[nodiscard]] bool available() const noexcept;
     [[nodiscard]] std::size_t bodyCount() const noexcept;
@@ -29,12 +29,12 @@ class MmdPhysics {
     [[nodiscard]] std::uint8_t bodyMode(std::size_t body) const noexcept;
     void reset();
     void step(float deltaSeconds);
-    void setGravity(const Float3& gravity);
+    void setGravity(const Float3 &gravity);
     void setGravityNoise(float amplitude, float frequency);
     void setFloorCollision(bool enabled);
-    void setKinematicTransform(std::size_t body, const PhysicsTransform& transform);
-    void teleportBody(std::size_t body, const PhysicsTransform& transform);
-    void applyImpulse(std::size_t body, const Float3& linear, const Float3& angular, bool local);
+    void setKinematicTransform(std::size_t body, const PhysicsTransform &transform);
+    void teleportBody(std::size_t body, const PhysicsTransform &transform);
+    void applyImpulse(std::size_t body, const Float3 &linear, const Float3 &angular, bool local);
     void clearMotion(std::size_t body);
     [[nodiscard]] PhysicsTransform bodyTransform(std::size_t body) const;
 
@@ -48,7 +48,7 @@ class MmdPhysics {
 // optional soft-body module is unavailable.
 class SoftBodySimulation {
   public:
-    explicit SoftBodySimulation(const PmxModel& model);
+    explicit SoftBodySimulation(const PmxModel &model);
     [[nodiscard]] bool available() const noexcept {
         return bodyCount_ != 0 && !positions_.empty();
     }
@@ -56,7 +56,7 @@ class SoftBodySimulation {
         return bodyCount_;
     }
     void reset();
-    void step(float deltaSeconds, const Float3& gravity);
+    void step(float deltaSeconds, const Float3 &gravity);
     void apply(std::span<PmxVertex> vertices) const;
 
   private:
