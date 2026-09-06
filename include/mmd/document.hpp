@@ -477,6 +477,9 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setMaterialTexture(MaterialHandle h, std::optional<TextureHandle> value);
     [[nodiscard]] bool setMaterialSphereTexture(MaterialHandle h, std::optional<TextureHandle> value);
     [[nodiscard]] bool setMaterialToonTexture(MaterialHandle h, std::optional<TextureHandle> value);
+    [[nodiscard]] bool setMaterialSphereMode(MaterialHandle h, std::uint8_t value);
+    [[nodiscard]] bool setMaterialToonMode(MaterialHandle h, std::uint8_t value);
+    [[nodiscard]] bool setMaterialMemo(MaterialHandle h, std::string value);
     // FaceGraph owns indexCount; the supplied PmxMaterial::indexCount is ignored.
     [[nodiscard]] MaterialHandle addMaterial(PmxMaterial material);
     [[nodiscard]] bool moveMaterial(MaterialHandle h, std::size_t destination);
@@ -507,6 +510,10 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool addVertexMorphOffset(MorphHandle h, VertexHandle vertex, Float3 value);
     [[nodiscard]] bool addBoneMorphOffset(MorphHandle h, BoneHandle bone, Float3 translation, Float4 rotation);
     [[nodiscard]] bool addGroupMorphOffset(MorphHandle h, MorphHandle target, float weight);
+    [[nodiscard]] bool addUvMorphOffset(MorphHandle h, VertexHandle vertex, std::uint32_t channel, Float4 value);
+    [[nodiscard]] bool addMaterialMorphOffset(MorphHandle h, std::optional<MaterialHandle> material, std::uint8_t operation,
+                                               std::array<Float4, 8> values);
+    [[nodiscard]] bool addFlipMorphOffset(MorphHandle h, MorphHandle target, float weight);
     [[nodiscard]] bool addImpulseMorphOffset(MorphHandle h, RigidBodyHandle body, Float3 velocity, Float3 torque,
                                               bool local);
     [[nodiscard]] bool eraseMorphOffset(MorphHandle h, std::size_t index);
@@ -572,6 +579,7 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, MorphHandle morph);
     [[nodiscard]] bool eraseDisplayFrameItem(DisplayFrameHandle h, std::size_t index);
     [[nodiscard]] bool moveDisplayFrameItem(DisplayFrameHandle h, std::size_t from, std::size_t to);
+    [[nodiscard]] bool moveDisplayFrame(DisplayFrameHandle h, std::size_t destination);
     [[nodiscard]] bool eraseDisplayFrame(DisplayFrameHandle h);
     [[nodiscard]] SoftBodyHandle addSoftBody(PmxSoftBody body);
     [[nodiscard]] bool setSoftBody(SoftBodyHandle h, const PmxSoftBody &body);

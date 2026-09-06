@@ -714,6 +714,20 @@ bool PmxDocument::Transaction::setMaterialToonTexture(MaterialHandle handle, std
                        [&](auto &material) { material.toonTextureIndex = index; }) &&
            (recordHandle(changes_.materials, handle), changes_.texturesChanged = true, true);
 }
+bool PmxDocument::Transaction::setMaterialSphereMode(MaterialHandle handle, std::uint8_t value) {
+    return updateValue(materials_, model_.materials, handle, [&](auto &material) { material.sphereMode = value; }) &&
+           (recordHandle(changes_.materials, handle), true);
+}
+bool PmxDocument::Transaction::setMaterialToonMode(MaterialHandle handle, std::uint8_t value) {
+    if (value > 1)
+        return false;
+    return updateValue(materials_, model_.materials, handle, [&](auto &material) { material.toonMode = value; }) &&
+           (recordHandle(changes_.materials, handle), true);
+}
+bool PmxDocument::Transaction::setMaterialMemo(MaterialHandle handle, std::string value) {
+    return updateValue(materials_, model_.materials, handle, [&](auto &material) { material.memo = std::move(value); }) &&
+           (recordHandle(changes_.materials, handle), true);
+}
 bool PmxDocument::Transaction::moveMaterial(MaterialHandle h, std::size_t destination) {
     const auto source = materials_.index(h);
     if (!source || destination >= model_.materials.size())
@@ -1019,6 +1033,39 @@ bool PmxDocument::Transaction::addGroupMorphOffset(MorphHandle handle, MorphHand
     const auto morph = morphs_.index(handle);
     const auto index = morphs_.index(target);
     if (!morph || !index || model_.morphs[*morph].type != 0)
+        return false;
+    PmxMorphOffset offset;
+    offset.index = static_cast<std::int32_t>(*index);
+    offset.scalar = weight;
+    return addMorphOffset(handle, offset);
+}
+bool PmxDocument::Transaction::addUvMorphOffset(MorphHandle handle, VertexHandle vertex, std::uint32_t channel,
+                                                 Float4 value) {
+    const auto morph = morphs_.index(handle);
+    const auto index = vertices_.index(vertex);
+    if (!morph || !index || channel > 4 || model_.morphs[*morph].type != channel + 3U)
+        return false;
+    PmxMorphOffset offset;
+    offset.index = static_cast<std::int32_t>(*index);
+    offset.vector4 = value;
+    return addMorphOffset(handle, offset);
+}
+bool PmxDocument::Transaction::addMaterialMorphOffset(MorphHandle handle, std::optional<MaterialHandle> material,
+                                                       std::uint8_t operation, std::array<Float4, 8> values) {
+    const auto morph = morphs_.index(handle);
+    const auto index = materialIndex(materials_, material);
+    if (!morph || index == -2 || operation > 1 || model_.morphs[*morph].type != 8)
+        return false;
+    PmxMorphOffset offset;
+    offset.index = index;
+    offset.operation = operation;
+    offset.materialVectors = values;
+    return addMorphOffset(handle, offset);
+}
+bool PmxDocument::Transaction::addFlipMorphOffset(MorphHandle handle, MorphHandle target, float weight) {
+    const auto morph = morphs_.index(handle);
+    const auto index = morphs_.index(target);
+    if (!morph || !index || model_.morphs[*morph].type != 9)
         return false;
     PmxMorphOffset offset;
     offset.index = static_cast<std::int32_t>(*index);
@@ -1416,6 +1463,22 @@ bool PmxDocument::Transaction::moveDisplayFrameItem(DisplayFrameHandle handle, s
     items.erase(items.begin() + static_cast<std::ptrdiff_t>(from));
     items.insert(items.begin() + static_cast<std::ptrdiff_t>(to), value);
     recordHandle(changes_.displayFrames, handle);
+    return true;
+}
+bool PmxDocument::Transaction::moveDisplayFrame(DisplayFrameHandle handle, std::size_t destination) {
+    const auto source = displayFrames_.index(handle);
+    if (!source || destination >= model_.displayFrames.size())
+        return false;
+    if (*source == destination)
+        return true;
+    auto value = std::move(model_.displayFrames[*source]);
+    model_.displayFrames.erase(model_.displayFrames.begin() + static_cast<std::ptrdiff_t>(*source));
+    model_.displayFrames.insert(model_.displayFrames.begin() + static_cast<std::ptrdiff_t>(destination), std::move(value));
+    auto slot = displayFrames_.slots[*source];
+    displayFrames_.slots.erase(displayFrames_.slots.begin() + static_cast<std::ptrdiff_t>(*source));
+    displayFrames_.slots.insert(displayFrames_.slots.begin() + static_cast<std::ptrdiff_t>(destination), slot);
+    recordHandle(changes_.displayFrames, handle);
+    changes_.topologyChanged = true;
     return true;
 }
 bool PmxDocument::Transaction::eraseDisplayFrame(DisplayFrameHandle h) {
