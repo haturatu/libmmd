@@ -533,6 +533,8 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool eraseTexture(TextureHandle h);
     [[nodiscard]] RigidBodyHandle addRigidBody(PmxRigidBody body);
     [[nodiscard]] bool setRigidBody(RigidBodyHandle h, const PmxRigidBody &body);
+    [[nodiscard]] bool setRigidBodyName(RigidBodyHandle h, std::string value);
+    [[nodiscard]] bool setRigidBodyEnglishName(RigidBodyHandle h, std::string value);
     [[nodiscard]] bool setRigidBodyBone(RigidBodyHandle h, std::optional<BoneHandle> value);
     [[nodiscard]] bool setRigidBodyShape(RigidBodyHandle h, std::uint8_t shape, Float3 size);
     [[nodiscard]] bool setRigidBodyTransform(RigidBodyHandle h, Float3 position, Float3 rotation);
@@ -560,6 +562,9 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool eraseRigidBody(RigidBodyHandle h);
     [[nodiscard]] JointHandle addJoint(PmxJoint joint);
     [[nodiscard]] bool setJoint(JointHandle h, const PmxJoint &joint);
+    [[nodiscard]] bool setJointName(JointHandle h, std::string value);
+    [[nodiscard]] bool setJointEnglishName(JointHandle h, std::string value);
+    [[nodiscard]] bool setJointType(JointHandle h, std::uint8_t value);
     [[nodiscard]] bool setJointBodies(JointHandle h, RigidBodyHandle bodyA, RigidBodyHandle bodyB);
     [[nodiscard]] bool setJointTransform(JointHandle h, Float3 position, Float3 rotation);
     [[nodiscard]] bool setJointLimits(JointHandle h, Float3 translationMinimum, Float3 translationMaximum,
@@ -592,6 +597,8 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool eraseDisplayFrame(DisplayFrameHandle h);
     [[nodiscard]] SoftBodyHandle addSoftBody(PmxSoftBody body);
     [[nodiscard]] bool setSoftBody(SoftBodyHandle h, const PmxSoftBody &body);
+    [[nodiscard]] bool setSoftBodyName(SoftBodyHandle h, std::string value);
+    [[nodiscard]] bool setSoftBodyEnglishName(SoftBodyHandle h, std::string value);
     [[nodiscard]] bool setSoftBodyMaterial(SoftBodyHandle h, std::optional<MaterialHandle> value);
     [[nodiscard]] bool setSoftBodyAnchors(SoftBodyHandle h, std::vector<PmxSoftBodyAnchor> value);
     [[nodiscard]] bool setSoftBodyPinnedVertices(SoftBodyHandle h, std::vector<std::int32_t> value);

@@ -1350,6 +1350,15 @@ bool PmxDocument::Transaction::setRigidBody(RigidBodyHandle handle, const PmxRig
     changes_.physicsChanged = true;
     return true;
 }
+bool PmxDocument::Transaction::setRigidBodyName(RigidBodyHandle handle, std::string value) {
+    return updateValue(rigidBodies_, model_.rigidBodies, handle, [&](auto &body) { body.name = std::move(value); }) &&
+           (recordHandle(changes_.rigidBodies, handle), true);
+}
+bool PmxDocument::Transaction::setRigidBodyEnglishName(RigidBodyHandle handle, std::string value) {
+    return updateValue(rigidBodies_, model_.rigidBodies, handle,
+                       [&](auto &body) { body.englishName = std::move(value); }) &&
+           (recordHandle(changes_.rigidBodies, handle), true);
+}
 bool PmxDocument::Transaction::setRigidBodyBone(RigidBodyHandle handle, std::optional<BoneHandle> value) {
     const auto index = boneIndex(bones_, value);
     if (index == -2)
@@ -1452,6 +1461,19 @@ bool PmxDocument::Transaction::setJoint(JointHandle handle, const PmxJoint &join
     recordHandle(changes_.joints, handle);
     changes_.physicsChanged = true;
     return true;
+}
+bool PmxDocument::Transaction::setJointName(JointHandle handle, std::string value) {
+    return updateValue(joints_, model_.joints, handle, [&](auto &joint) { joint.name = std::move(value); }) &&
+           (recordHandle(changes_.joints, handle), true);
+}
+bool PmxDocument::Transaction::setJointEnglishName(JointHandle handle, std::string value) {
+    return updateValue(joints_, model_.joints, handle,
+                       [&](auto &joint) { joint.englishName = std::move(value); }) &&
+           (recordHandle(changes_.joints, handle), true);
+}
+bool PmxDocument::Transaction::setJointType(JointHandle handle, std::uint8_t value) {
+    return updateValue(joints_, model_.joints, handle, [&](auto &joint) { joint.type = value; }) &&
+           (recordHandle(changes_.joints, handle), true);
 }
 bool PmxDocument::Transaction::setJointBodies(JointHandle handle, RigidBodyHandle bodyA, RigidBodyHandle bodyB) {
     const auto a = rigidBodyIndex(rigidBodies_, bodyA);
@@ -1627,6 +1649,15 @@ bool PmxDocument::Transaction::setSoftBody(SoftBodyHandle handle, const PmxSoftB
     recordHandle(changes_.softBodies, handle);
     changes_.physicsChanged = true;
     return true;
+}
+bool PmxDocument::Transaction::setSoftBodyName(SoftBodyHandle handle, std::string value) {
+    return updateValue(softBodies_, model_.softBodies, handle, [&](auto &body) { body.name = std::move(value); }) &&
+           (recordHandle(changes_.softBodies, handle), true);
+}
+bool PmxDocument::Transaction::setSoftBodyEnglishName(SoftBodyHandle handle, std::string value) {
+    return updateValue(softBodies_, model_.softBodies, handle,
+                       [&](auto &body) { body.englishName = std::move(value); }) &&
+           (recordHandle(changes_.softBodies, handle), true);
 }
 bool PmxDocument::Transaction::setSoftBodyMaterial(SoftBodyHandle handle, std::optional<MaterialHandle> value) {
     const auto index = materialIndex(materials_, value);
