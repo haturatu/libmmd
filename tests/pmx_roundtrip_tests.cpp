@@ -67,6 +67,12 @@ int main() {
     assert(mmd::pmx::semanticEqual(model, semanticallyEquivalent));
     assert(!mmd::pmx::semanticEqual(model, semanticallyEquivalent, mmd::PmxComparisonProfile::preservation));
 
+    {
+        const auto before = model;
+        mmd::PmxDocument noOp(model);
+        assert(noOp.transaction().commit().committed);
+        assert(mmd::pmx::semanticEqual(before, noOp.model(), mmd::PmxComparisonProfile::preservation));
+    }
     mmd::PmxDocument document(model);
     const auto root = document.boneHandle(0);
     assert(document.resolve(root) != nullptr);
@@ -85,6 +91,7 @@ int main() {
         assert(allMaterialDocument.allMaterialReferences()[0].targetKind == mmd::ReferenceTargetKind::all);
     }
     {
+        const auto before = document.model();
         auto transaction = document.transaction();
         const auto impact = transaction.analyzeErase(root);
         assert(impact.vertexWeights == 3);
@@ -92,6 +99,8 @@ int main() {
         const auto result = transaction.commit();
         assert(!result.committed);
         assert(!result.errors.empty());
+        assert(mmd::pmx::semanticEqual(before, document.model(), mmd::PmxComparisonProfile::preservation));
+        assert(document.resolve(root) != nullptr);
     }
     {
         auto transaction = document.transaction();
@@ -134,6 +143,7 @@ int main() {
         assert(editable.model().materials[1].indexCount == 6);
         assert(editable.model().indices.size() == 6);
         assert(editable.resolve(unreferencedVertex) != nullptr);
+        assert(editable.resolve(firstFace) != nullptr);
         assert(editable.model().morphs[0].name == "b");
         assert(editable.resolve(frame) != nullptr);
         assert(editable.resolve(softBody) != nullptr);
@@ -211,6 +221,18 @@ int main() {
         assert(transaction.commit().committed);
         assert(editable.resolve(inserted)->parent == 1);
         assert(editable.model().vertices[0].bones[0] == 1);
+    }
+    {
+        mmd::PmxDocument editable(model);
+        const auto rootBone = editable.boneHandle(0);
+        const auto material = editable.materialHandle(0);
+        auto transaction = editable.transaction();
+        const auto bone = transaction.addBone({.value = {.name = "draft"}, .parent = rootBone});
+        const auto body = transaction.addRigidBody({.value = {.name = "draft body"}, .bone = rootBone});
+        assert(bone && body);
+        assert(transaction.addJoint({.value = {.name = "draft joint"}, .bodyA = body, .bodyB = body}));
+        assert(transaction.addSoftBody({.value = {.name = "draft soft"}, .material = material}));
+        assert(transaction.commit().committed);
     }
 
     std::filesystem::remove(path);

@@ -180,6 +180,8 @@ ValidationResult pmx::validate(const PmxModel& model) {
     for (const auto& vertex : model.vertices) {
         addError(result, finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) && finite(vertex.weights),
                  "vertex contains non-finite values");
+        addError(result, model.metadata.version >= 2.1F || vertex.weightType != PmxWeightType::qdef,
+                 "QDEF requires PMX 2.1");
         const auto boneCount = vertex.weightType == PmxWeightType::bdef1 ? 1U
                            : vertex.weightType == PmxWeightType::bdef2 || vertex.weightType == PmxWeightType::sdef ? 2U
                                                                                                                     : 4U;
@@ -217,6 +219,8 @@ ValidationResult pmx::validate(const PmxModel& model) {
     }
     for (const auto& morph : model.morphs) {
         addError(result, morph.type <= 10, "unknown morph type");
+        addError(result, model.metadata.version >= 2.1F || (morph.type != 9 && morph.type != 10),
+                 "flip and impulse morphs require PMX 2.1");
         for (const auto& offset : morph.offsets) {
             const auto count = morph.type == 1 || (morph.type >= 3 && morph.type <= 7) ? model.vertices.size()
                              : morph.type == 2 ? model.bones.size()

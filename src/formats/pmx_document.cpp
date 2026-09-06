@@ -178,6 +178,35 @@ DisplayFrameHandle PmxDocument::Transaction::addDisplayFrame(PmxDisplayFrame fra
 bool PmxDocument::Transaction::eraseDisplayFrame(DisplayFrameHandle h) { const auto target=displayFrames_.index(h);if(!target)return false;model_.displayFrames.erase(model_.displayFrames.begin()+static_cast<std::ptrdiff_t>(*target));displayFrames_.slots.erase(displayFrames_.slots.begin()+static_cast<std::ptrdiff_t>(*target));return true; }
 SoftBodyHandle PmxDocument::Transaction::addSoftBody(PmxSoftBody body) { if(done_)return {};if(model_.metadata.version<2.1F){errors_.push_back("soft bodies require PMX 2.1");return {};}model_.softBodies.push_back(std::move(body));return softBodies_.append(); }
 bool PmxDocument::Transaction::eraseSoftBody(SoftBodyHandle h) { const auto target=softBodies_.index(h);if(!target)return false;model_.softBodies.erase(model_.softBodies.begin()+static_cast<std::ptrdiff_t>(*target));softBodies_.slots.erase(softBodies_.slots.begin()+static_cast<std::ptrdiff_t>(*target));return true; }
-PmxTransactionResult PmxDocument::Transaction::commit() { if(done_)return {false,{}, {"transaction has already finished"}};done_=true;model_.indices.clear();for(std::size_t material=0;material<model_.materials.size();++material){auto& current=model_.materials[material];current.indexCount=0;const auto handle=materials_.at(material);for(const auto& face:faces_)if(face.material==handle){for(const auto vertex:face.vertices){const auto index=vertices_.index(vertex);if(!index){errors_.push_back("face has an invalid vertex");break;}model_.indices.push_back(static_cast<std::uint32_t>(*index));}current.indexCount+=3;}}auto validation=pmx::validate(model_);if(!errors_.empty()||!validation.valid())return {false,std::move(validation),std::move(errors_)};document_.model_=std::move(model_);document_.vertices_=std::move(vertices_);document_.textures_=std::move(textures_);document_.bones_=std::move(bones_);document_.materials_=std::move(materials_);document_.morphs_=std::move(morphs_);document_.displayFrames_=std::move(displayFrames_);document_.rigidBodies_=std::move(rigidBodies_);document_.joints_=std::move(joints_);document_.softBodies_=std::move(softBodies_);document_.faces_=std::move(faces_);document_.facesTable_=std::move(facesTable_);document_.dirty_=false;document_.rebuildReferences();return {true,std::move(validation),{}}; }
+PmxTransactionResult PmxDocument::Transaction::commit() {
+    if(done_) return {false,{}, {"transaction has already finished"}};
+    done_=true;
+    std::vector<std::vector<const PmxFace*>> facesByMaterial(model_.materials.size());
+    for(const auto& face:faces_) {
+        const auto material=materials_.index(face.material);
+        if(!material) { errors_.push_back("face has an invalid material"); continue; }
+        facesByMaterial[*material].push_back(&face);
+    }
+    model_.indices.clear();
+    for(std::size_t material=0;material<model_.materials.size();++material) {
+        auto& current=model_.materials[material]; current.indexCount=0;
+        for(const auto* face:facesByMaterial[material]) {
+            for(const auto vertex:face->vertices) {
+                const auto index=vertices_.index(vertex);
+                if(!index) { errors_.push_back("face has an invalid vertex"); continue; }
+                model_.indices.push_back(static_cast<std::uint32_t>(*index));
+            }
+            current.indexCount+=3;
+        }
+    }
+    auto validation=pmx::validate(model_);
+    if(!errors_.empty()||!validation.valid()) return {false,std::move(validation),std::move(errors_)};
+    document_.model_=std::move(model_); document_.vertices_=std::move(vertices_); document_.textures_=std::move(textures_);
+    document_.bones_=std::move(bones_); document_.materials_=std::move(materials_); document_.morphs_=std::move(morphs_);
+    document_.displayFrames_=std::move(displayFrames_); document_.rigidBodies_=std::move(rigidBodies_); document_.joints_=std::move(joints_);
+    document_.softBodies_=std::move(softBodies_); document_.faces_=std::move(faces_); document_.facesTable_=std::move(facesTable_);
+    document_.dirty_=false; document_.rebuildReferences();
+    return {true,std::move(validation),{}};
+}
 
 } // namespace mmd
