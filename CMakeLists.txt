@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(libmmd VERSION 0.2.0 LANGUAGES CXX)
+project(libmmd VERSION 0.2.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -92,9 +92,8 @@ if(LIBMMD_ENABLE_PHYSICS)
     endif()
     target_compile_definitions(
         mmd_physics
-        PRIVATE
-            LIBMMD_HAS_BULLET=${LIBMMD_HAS_BULLET}
-            DAYO_HAS_BULLET=${LIBMMD_HAS_BULLET}
+        PRIVATE LIBMMD_HAS_BULLET=${LIBMMD_HAS_BULLET}
+        INTERFACE LIBMMD_HAS_BULLET=${LIBMMD_HAS_BULLET}
     )
 endif()
 
