@@ -1,6 +1,5 @@
 #include <mmd/document.hpp>
 
-#include <stdexcept>
 
 namespace mmd {
 namespace {
@@ -532,25 +531,24 @@ bool PmxDocument::Transaction::setBoneIkLimits(BoneHandle handle, std::int32_t l
            (recordHandle(changes_.bones, handle), true);
 }
 bool PmxDocument::Transaction::setBoneIkLink(BoneHandle handle, std::size_t index, PmxIkLink value) {
-    return updateValue(bones_, model_.bones, handle, [&](auto &bone) {
-               if (index < bone.ikLinks.size())
-                   bone.ikLinks[index] = value;
-               else
-                   throw std::out_of_range("IK link index");
-           }) &&
-           (recordHandle(changes_.bones, handle), true);
+    const auto bone = bones_.index(handle);
+    if (!bone || index >= model_.bones[*bone].ikLinks.size())
+        return false;
+    model_.bones[*bone].ikLinks[index] = value;
+    recordHandle(changes_.bones, handle);
+    return true;
 }
 bool PmxDocument::Transaction::addBoneIkLink(BoneHandle handle, PmxIkLink value) {
     return updateValue(bones_, model_.bones, handle, [&](auto &bone) { bone.ikLinks.push_back(value); }) &&
            (recordHandle(changes_.bones, handle), true);
 }
 bool PmxDocument::Transaction::eraseBoneIkLink(BoneHandle handle, std::size_t index) {
-    return updateValue(bones_, model_.bones, handle, [&](auto &bone) {
-               if (index >= bone.ikLinks.size())
-                   throw std::out_of_range("IK link index");
-               bone.ikLinks.erase(bone.ikLinks.begin() + static_cast<std::ptrdiff_t>(index));
-           }) &&
-           (recordHandle(changes_.bones, handle), true);
+    const auto bone = bones_.index(handle);
+    if (!bone || index >= model_.bones[*bone].ikLinks.size())
+        return false;
+    model_.bones[*bone].ikLinks.erase(model_.bones[*bone].ikLinks.begin() + static_cast<std::ptrdiff_t>(index));
+    recordHandle(changes_.bones, handle);
+    return true;
 }
 bool PmxDocument::Transaction::eraseBone(BoneHandle h, ErasePolicy policy) {
     const auto target = bones_.index(h);

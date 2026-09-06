@@ -91,6 +91,20 @@ struct PmxFace {
     VertexHandle vertices[3]{};
     MaterialHandle material{};
 };
+struct PmxChangeSet {
+    bool topologyChanged{};
+    std::vector<VertexHandle> vertices;
+    std::vector<TextureHandle> textures;
+    std::vector<MaterialHandle> materials;
+    std::vector<BoneHandle> bones;
+    std::vector<MorphHandle> morphs;
+    std::vector<DisplayFrameHandle> displayFrames;
+    std::vector<RigidBodyHandle> rigidBodies;
+    std::vector<JointHandle> joints;
+    std::vector<SoftBodyHandle> softBodies;
+    bool texturesChanged{};
+    bool physicsChanged{};
+};
 enum class ErasePolicy : std::uint8_t { rejectIfReferenced };
 struct EraseImpact {
     std::size_t vertexWeights{}, childBones{}, ikLinks{}, morphOffsets{}, displayEntries{}, rigidBodies{};
@@ -125,20 +139,7 @@ struct PmxTransactionResult {
     bool committed{};
     ValidationResult validation;
     std::vector<std::string> errors;
-    struct ChangeSet {
-        bool topologyChanged{};
-        std::vector<VertexHandle> vertices;
-        std::vector<TextureHandle> textures;
-        std::vector<MaterialHandle> materials;
-        std::vector<BoneHandle> bones;
-        std::vector<MorphHandle> morphs;
-        std::vector<DisplayFrameHandle> displayFrames;
-        std::vector<RigidBodyHandle> rigidBodies;
-        std::vector<JointHandle> joints;
-        std::vector<SoftBodyHandle> softBodies;
-        bool texturesChanged{};
-        bool physicsChanged{};
-    } changes;
+    PmxChangeSet changes;
 };
 
 class PmxDocument {
@@ -588,7 +589,7 @@ class PmxDocument::Transaction {
     Table<FaceTag> facesTable_;
     std::vector<PmxFace> faces_;
     std::vector<std::string> errors_;
-    PmxTransactionResult::ChangeSet changes_;
+    PmxChangeSet changes_;
     bool done_{};
     [[nodiscard]] bool boneReferenced(std::size_t i) const;
     [[nodiscard]] bool materialReferenced(std::size_t i) const;

@@ -228,17 +228,18 @@ struct PmxMesh {
 
 enum class ValidationSeverity : std::uint8_t { info, warning, error, fatal };
 enum class ValidationCode : std::uint16_t { generic, invalid_format, invalid_reference, material_range, bone_cycle };
+struct ValidationLocation {
+    std::uint64_t id{};
+    std::uint32_t generation{};
+    std::string field;
+    std::uint32_t subIndex{};
+};
 struct ValidationIssue {
     ValidationSeverity severity{ValidationSeverity::error};
     ValidationCode code{ValidationCode::generic};
     std::string object;
     std::string message;
-    struct Location {
-        std::uint64_t id{};
-        std::uint32_t generation{};
-        std::string field;
-        std::uint32_t subIndex{};
-    } location;
+    ValidationLocation location;
 };
 struct ValidationResult {
     std::vector<ValidationIssue> issues;
