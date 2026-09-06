@@ -406,6 +406,13 @@ BoneHandle PmxDocument::Transaction::insertBone(std::size_t destination, PmxBone
     model_.bones.insert(model_.bones.begin() + static_cast<std::ptrdiff_t>(destination), std::move(bone));
     return bones_.insert(destination);
 }
+bool PmxDocument::Transaction::setBone(BoneHandle handle, const PmxBone &bone) {
+    const auto index = bones_.index(handle);
+    if (!index)
+        return false;
+    model_.bones[*index] = bone;
+    return true;
+}
 bool PmxDocument::Transaction::eraseBone(BoneHandle h, ErasePolicy policy) {
     const auto target = bones_.index(h);
     if (!target)
@@ -452,6 +459,17 @@ MaterialHandle PmxDocument::Transaction::addMaterial(PmxMaterial material) {
     material.indexCount = 0;
     model_.materials.push_back(std::move(material));
     return materials_.append();
+}
+bool PmxDocument::Transaction::setMaterial(MaterialHandle handle, const PmxMaterial &material) {
+    const auto index = materials_.index(handle);
+    if (!index)
+        return false;
+    if (material.indexCount != model_.materials[*index].indexCount) {
+        errors_.push_back("material index count is owned by the face graph");
+        return false;
+    }
+    model_.materials[*index] = material;
+    return true;
 }
 bool PmxDocument::Transaction::moveMaterial(MaterialHandle h, std::size_t destination) {
     const auto source = materials_.index(h);
@@ -505,6 +523,13 @@ VertexHandle PmxDocument::Transaction::addVertex(PmxVertex vertex) {
         return {};
     model_.vertices.push_back(std::move(vertex));
     return vertices_.append();
+}
+bool PmxDocument::Transaction::setVertex(VertexHandle handle, const PmxVertex &vertex) {
+    const auto index = vertices_.index(handle);
+    if (!index)
+        return false;
+    model_.vertices[*index] = vertex;
+    return true;
 }
 VertexEraseImpact PmxDocument::Transaction::analyzeErase(VertexHandle handle) const {
     VertexEraseImpact impact;
@@ -615,6 +640,13 @@ MorphHandle PmxDocument::Transaction::addMorph(PmxMorph morph) {
     model_.morphs.push_back(std::move(morph));
     return morphs_.append();
 }
+bool PmxDocument::Transaction::setMorph(MorphHandle handle, const PmxMorph &morph) {
+    const auto index = morphs_.index(handle);
+    if (!index)
+        return false;
+    model_.morphs[*index] = morph;
+    return true;
+}
 bool PmxDocument::Transaction::morphReferenced(std::size_t index) const {
     for (const auto &morph : model_.morphs)
         if (morph.type == 0 || morph.type == 9)
@@ -676,6 +708,13 @@ TextureHandle PmxDocument::Transaction::addTexture(PmxTexture texture) {
     model_.textures.push_back(std::move(texture));
     return textures_.append();
 }
+bool PmxDocument::Transaction::setTexture(TextureHandle handle, const PmxTexture &texture) {
+    const auto index = textures_.index(handle);
+    if (!index)
+        return false;
+    model_.textures[*index] = texture;
+    return true;
+}
 bool PmxDocument::Transaction::moveTexture(TextureHandle h, std::size_t destination) {
     const auto source = textures_.index(h);
     if (!source || destination >= model_.textures.size())
@@ -732,6 +771,13 @@ RigidBodyHandle PmxDocument::Transaction::addRigidBody(PmxRigidBody body) {
     model_.rigidBodies.push_back(std::move(body));
     return rigidBodies_.append();
 }
+bool PmxDocument::Transaction::setRigidBody(RigidBodyHandle handle, const PmxRigidBody &body) {
+    const auto index = rigidBodies_.index(handle);
+    if (!index)
+        return false;
+    model_.rigidBodies[*index] = body;
+    return true;
+}
 bool PmxDocument::Transaction::moveRigidBody(RigidBodyHandle h, std::size_t destination) {
     const auto source = rigidBodies_.index(h);
     if (!source || destination >= model_.rigidBodies.size())
@@ -773,6 +819,13 @@ JointHandle PmxDocument::Transaction::addJoint(PmxJoint joint) {
     model_.joints.push_back(std::move(joint));
     return joints_.append();
 }
+bool PmxDocument::Transaction::setJoint(JointHandle handle, const PmxJoint &joint) {
+    const auto index = joints_.index(handle);
+    if (!index)
+        return false;
+    model_.joints[*index] = joint;
+    return true;
+}
 bool PmxDocument::Transaction::eraseJoint(JointHandle h) {
     const auto target = joints_.index(h);
     if (!target)
@@ -786,6 +839,13 @@ DisplayFrameHandle PmxDocument::Transaction::addDisplayFrame(PmxDisplayFrame fra
         return {};
     model_.displayFrames.push_back(std::move(frame));
     return displayFrames_.append();
+}
+bool PmxDocument::Transaction::setDisplayFrame(DisplayFrameHandle handle, const PmxDisplayFrame &frame) {
+    const auto index = displayFrames_.index(handle);
+    if (!index)
+        return false;
+    model_.displayFrames[*index] = frame;
+    return true;
 }
 bool PmxDocument::Transaction::eraseDisplayFrame(DisplayFrameHandle h) {
     const auto target = displayFrames_.index(h);
@@ -804,6 +864,13 @@ SoftBodyHandle PmxDocument::Transaction::addSoftBody(PmxSoftBody body) {
     }
     model_.softBodies.push_back(std::move(body));
     return softBodies_.append();
+}
+bool PmxDocument::Transaction::setSoftBody(SoftBodyHandle handle, const PmxSoftBody &body) {
+    const auto index = softBodies_.index(handle);
+    if (!index)
+        return false;
+    model_.softBodies[*index] = body;
+    return true;
 }
 bool PmxDocument::Transaction::eraseSoftBody(SoftBodyHandle h) {
     const auto target = softBodies_.index(h);
