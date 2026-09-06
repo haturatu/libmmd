@@ -53,7 +53,7 @@ struct MmdPhysics::Impl {
 #endif
 };
 
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
 namespace {
 
 btVector3 vector(const Float3& value) {
@@ -112,7 +112,7 @@ MmdPhysics::MmdPhysics(const PmxModel& model) : impl_(std::make_unique<Impl>()) 
             !std::isfinite(source.friction))
             throw std::runtime_error("PMX rigid body contains a non-finite numeric value");
     }
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     impl_->collisionConfiguration = std::make_unique<btDefaultCollisionConfiguration>();
     impl_->dispatcher = std::make_unique<btCollisionDispatcher>(impl_->collisionConfiguration.get());
     impl_->broadphase = std::make_unique<btDbvtBroadphase>();
@@ -349,7 +349,7 @@ void SoftBodySimulation::apply(std::span<PmxVertex> vertices) const {
 }
 
 bool MmdPhysics::available() const noexcept {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     return impl_ != nullptr && impl_->world != nullptr;
 #else
     return false;
@@ -357,7 +357,7 @@ bool MmdPhysics::available() const noexcept {
 }
 
 std::size_t MmdPhysics::bodyCount() const noexcept {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     return impl_->bodies.size();
 #else
     return 0;
@@ -365,7 +365,7 @@ std::size_t MmdPhysics::bodyCount() const noexcept {
 }
 
 std::size_t MmdPhysics::jointCount() const noexcept {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     return impl_->constraints.size();
 #else
     return 0;
@@ -373,7 +373,7 @@ std::size_t MmdPhysics::jointCount() const noexcept {
 }
 
 std::uint8_t MmdPhysics::bodyMode(std::size_t body) const noexcept {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     return impl_ != nullptr && body < impl_->modes.size() ? impl_->modes[body] : std::uint8_t{0};
 #else
     static_cast<void>(body);
@@ -382,7 +382,7 @@ std::uint8_t MmdPhysics::bodyMode(std::size_t body) const noexcept {
 }
 
 void MmdPhysics::reset() {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     for (std::size_t i = 0; i < impl_->bodies.size(); ++i) {
         impl_->bodies[i]->setWorldTransform(impl_->initialTransforms[i]);
         impl_->bodies[i]->getMotionState()->setWorldTransform(impl_->initialTransforms[i]);
@@ -405,7 +405,7 @@ void MmdPhysics::reset() {
 }
 
 void MmdPhysics::step(float deltaSeconds) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     if (deltaSeconds > 0.0F) {
         const float dt = std::min(deltaSeconds, 0.25F);
         impl_->elapsed += dt;
@@ -447,7 +447,7 @@ void MmdPhysics::step(float deltaSeconds) {
 }
 
 void MmdPhysics::setGravity(const Float3& gravity) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     impl_->gravity = gravity;
     impl_->world->setGravity(vector(gravity));
 #else
@@ -456,7 +456,7 @@ void MmdPhysics::setGravity(const Float3& gravity) {
 }
 
 void MmdPhysics::setGravityNoise(float amplitude, float frequency) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     impl_->gravityNoiseAmplitude = std::max(amplitude, 0.0F);
     impl_->gravityNoiseFrequency = std::max(frequency, 0.0F);
 #else
@@ -466,7 +466,7 @@ void MmdPhysics::setGravityNoise(float amplitude, float frequency) {
 }
 
 void MmdPhysics::setFloorCollision(bool enabled) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     if (impl_->floorCollision == enabled)
         return;
     impl_->floorCollision = enabled;
@@ -489,7 +489,7 @@ void MmdPhysics::setFloorCollision(bool enabled) {
 }
 
 void MmdPhysics::setKinematicTransform(std::size_t body, const PhysicsTransform& value) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
     if (impl_->modes[body] != 0 || !finite(value))
@@ -507,7 +507,7 @@ void MmdPhysics::setKinematicTransform(std::size_t body, const PhysicsTransform&
 }
 
 void MmdPhysics::teleportBody(std::size_t body, const PhysicsTransform& value) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
     if (!finite(value))
@@ -534,7 +534,7 @@ void MmdPhysics::teleportBody(std::size_t body, const PhysicsTransform& value) {
 }
 
 void MmdPhysics::applyImpulse(std::size_t body, const Float3& linear, const Float3& angular, bool local) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
     auto linearValue = vector(linear);
@@ -556,7 +556,7 @@ void MmdPhysics::applyImpulse(std::size_t body, const Float3& linear, const Floa
 }
 
 void MmdPhysics::clearMotion(std::size_t body) {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
     impl_->bodies[body]->setLinearVelocity({0.0F, 0.0F, 0.0F});
@@ -571,7 +571,7 @@ void MmdPhysics::clearMotion(std::size_t body) {
 }
 
 PhysicsTransform MmdPhysics::bodyTransform(std::size_t body) const {
-#if DAYO_HAS_BULLET
+#if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
     btTransform value;
