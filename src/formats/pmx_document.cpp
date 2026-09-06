@@ -122,6 +122,46 @@ PmxDocument &PmxDocument::operator=(const PmxDocument &other) {
     return *this;
 }
 
+void PmxDocument::restoreSnapshot(const PmxDocument &snapshot) {
+    if (this == &snapshot)
+        return;
+    snapshot.ensure();
+    model_ = snapshot.model_;
+    vertices_ = snapshot.vertices_;
+    textures_ = snapshot.textures_;
+    materials_ = snapshot.materials_;
+    bones_ = snapshot.bones_;
+    morphs_ = snapshot.morphs_;
+    displayFrames_ = snapshot.displayFrames_;
+    rigidBodies_ = snapshot.rigidBodies_;
+    joints_ = snapshot.joints_;
+    softBodies_ = snapshot.softBodies_;
+    facesTable_ = snapshot.facesTable_;
+    faces_ = snapshot.faces_;
+
+    const auto rebind = [this](auto &table) {
+        table.domain = domain_;
+        table.rebuildIndex();
+    };
+    rebind(vertices_);
+    rebind(textures_);
+    rebind(materials_);
+    rebind(bones_);
+    rebind(morphs_);
+    rebind(displayFrames_);
+    rebind(rigidBodies_);
+    rebind(joints_);
+    rebind(softBodies_);
+    rebind(facesTable_);
+    for (auto &face : faces_) {
+        for (auto &vertex : face.vertices)
+            vertex.domain = domain_;
+        face.material.domain = domain_;
+    }
+    dirty_ = false;
+    rebuildReferences();
+}
+
 PmxTransactionResult PmxDocument::finishPropertyEdit(PmxChangeSet changes) {
     auto validation = pmx::validate(model_);
     if (!validation.valid())

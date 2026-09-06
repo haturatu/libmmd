@@ -223,6 +223,7 @@ class PmxDocument {
     PmxDocument &operator=(const PmxDocument &other);
     PmxDocument(PmxDocument &&) noexcept = default;
     PmxDocument &operator=(PmxDocument &&) noexcept = default;
+    void restoreSnapshot(const PmxDocument &snapshot);
     [[nodiscard]] const PmxModel &model() const noexcept {
         return model_;
     }
