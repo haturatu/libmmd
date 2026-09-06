@@ -233,6 +233,12 @@ struct ValidationIssue {
     ValidationCode code{ValidationCode::generic};
     std::string object;
     std::string message;
+    struct Location {
+        std::uint64_t id{};
+        std::uint32_t generation{};
+        std::string field;
+        std::uint32_t subIndex{};
+    } location;
 };
 struct ValidationResult {
     std::vector<ValidationIssue> issues;

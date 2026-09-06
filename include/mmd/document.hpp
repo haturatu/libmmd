@@ -125,6 +125,20 @@ struct PmxTransactionResult {
     bool committed{};
     ValidationResult validation;
     std::vector<std::string> errors;
+    struct ChangeSet {
+        bool topologyChanged{};
+        std::vector<VertexHandle> vertices;
+        std::vector<TextureHandle> textures;
+        std::vector<MaterialHandle> materials;
+        std::vector<BoneHandle> bones;
+        std::vector<MorphHandle> morphs;
+        std::vector<DisplayFrameHandle> displayFrames;
+        std::vector<RigidBodyHandle> rigidBodies;
+        std::vector<JointHandle> joints;
+        std::vector<SoftBodyHandle> softBodies;
+        bool texturesChanged{};
+        bool physicsChanged{};
+    } changes;
 };
 
 class PmxDocument {
@@ -418,17 +432,51 @@ class PmxDocument::Transaction {
         return true;
     }
     [[nodiscard]] bool setBone(BoneHandle h, const PmxBone &bone);
+    [[nodiscard]] bool setBoneName(BoneHandle h, std::string value);
+    [[nodiscard]] bool setBoneEnglishName(BoneHandle h, std::string value);
+    [[nodiscard]] bool setBonePosition(BoneHandle h, Float3 value);
+    [[nodiscard]] bool setBoneTailBone(BoneHandle h, std::optional<BoneHandle> value);
+    [[nodiscard]] bool setBoneTailOffset(BoneHandle h, Float3 value);
+    [[nodiscard]] bool setBoneDeformLayer(BoneHandle h, std::int32_t value);
+    [[nodiscard]] bool setBoneFlags(BoneHandle h, std::uint16_t value);
+    [[nodiscard]] bool setBoneInheritParent(BoneHandle h, std::optional<BoneHandle> value);
+    [[nodiscard]] bool setBoneInheritRatio(BoneHandle h, float value);
+    [[nodiscard]] bool setBoneFixedAxis(BoneHandle h, Float3 value);
+    [[nodiscard]] bool setBoneLocalAxes(BoneHandle h, Float3 x, Float3 z);
+    [[nodiscard]] bool setBoneExternalParentKey(BoneHandle h, std::int32_t value);
+    [[nodiscard]] bool setBoneIkTarget(BoneHandle h, std::optional<BoneHandle> value);
+    [[nodiscard]] bool setBoneIkLimits(BoneHandle h, std::int32_t loops, float angle);
+    [[nodiscard]] bool setBoneIkLink(BoneHandle h, std::size_t index, PmxIkLink value);
+    [[nodiscard]] bool addBoneIkLink(BoneHandle h, PmxIkLink value);
+    [[nodiscard]] bool eraseBoneIkLink(BoneHandle h, std::size_t index);
     [[nodiscard]] EraseImpact analyzeErase(BoneHandle h) const;
     [[nodiscard]] bool eraseBone(BoneHandle h, ErasePolicy policy = ErasePolicy::rejectIfReferenced);
     [[nodiscard]] bool moveBone(BoneHandle h, std::size_t destination);
     [[nodiscard]] bool eraseMaterial(MaterialHandle h);
     [[nodiscard]] bool setMaterial(MaterialHandle h, const PmxMaterial &material);
+    [[nodiscard]] bool setMaterialName(MaterialHandle h, std::string value);
+    [[nodiscard]] bool setMaterialEnglishName(MaterialHandle h, std::string value);
+    [[nodiscard]] bool setMaterialDiffuse(MaterialHandle h, Float4 value);
+    [[nodiscard]] bool setMaterialSpecular(MaterialHandle h, Float3 value);
+    [[nodiscard]] bool setMaterialShininess(MaterialHandle h, float value);
+    [[nodiscard]] bool setMaterialAmbient(MaterialHandle h, Float3 value);
+    [[nodiscard]] bool setMaterialDrawFlags(MaterialHandle h, std::uint8_t value);
+    [[nodiscard]] bool setMaterialEdge(MaterialHandle h, Float4 color, float size);
+    [[nodiscard]] bool setMaterialTexture(MaterialHandle h, std::optional<TextureHandle> value);
+    [[nodiscard]] bool setMaterialSphereTexture(MaterialHandle h, std::optional<TextureHandle> value);
+    [[nodiscard]] bool setMaterialToonTexture(MaterialHandle h, std::optional<TextureHandle> value);
     // FaceGraph owns indexCount; the supplied PmxMaterial::indexCount is ignored.
     [[nodiscard]] MaterialHandle addMaterial(PmxMaterial material);
     [[nodiscard]] bool moveMaterial(MaterialHandle h, std::size_t destination);
     [[nodiscard]] bool eraseMaterial(MaterialHandle h, std::optional<MaterialHandle> replacement);
     [[nodiscard]] VertexHandle addVertex(PmxVertex vertex);
     [[nodiscard]] bool setVertex(VertexHandle h, const PmxVertex &vertex);
+    [[nodiscard]] bool setVertexPosition(VertexHandle h, Float3 value);
+    [[nodiscard]] bool setVertexNormal(VertexHandle h, Float3 value);
+    [[nodiscard]] bool setVertexUv(VertexHandle h, Float2 value);
+    [[nodiscard]] bool setVertexAdditionalUv(VertexHandle h, std::uint32_t channel, Float4 value);
+    [[nodiscard]] bool setVertexEdgeScale(VertexHandle h, float value);
+    [[nodiscard]] bool setVertexSkin(VertexHandle h, const PmxVertex &value);
     [[nodiscard]] VertexEraseImpact analyzeErase(VertexHandle h) const;
     [[nodiscard]] bool moveVertex(VertexHandle h, std::size_t destination);
     [[nodiscard]] bool eraseVertex(VertexHandle h);
@@ -437,14 +485,29 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setFaceMaterial(FaceHandle h, MaterialHandle material);
     [[nodiscard]] MorphHandle addMorph(PmxMorph morph);
     [[nodiscard]] bool setMorph(MorphHandle h, const PmxMorph &morph);
+    [[nodiscard]] bool setMorphName(MorphHandle h, std::string value);
+    [[nodiscard]] bool setMorphEnglishName(MorphHandle h, std::string value);
+    [[nodiscard]] bool setMorphPanel(MorphHandle h, std::uint8_t value);
+    [[nodiscard]] bool setMorphType(MorphHandle h, std::uint8_t value);
+    [[nodiscard]] bool setMorphOffset(MorphHandle h, std::size_t index, PmxMorphOffset value);
+    [[nodiscard]] bool addMorphOffset(MorphHandle h, PmxMorphOffset value);
+    [[nodiscard]] bool eraseMorphOffset(MorphHandle h, std::size_t index);
     [[nodiscard]] bool moveMorph(MorphHandle h, std::size_t destination);
     [[nodiscard]] bool eraseMorph(MorphHandle h);
     [[nodiscard]] TextureHandle addTexture(PmxTexture texture);
     [[nodiscard]] bool setTexture(TextureHandle h, const PmxTexture &texture);
+    [[nodiscard]] bool setTexturePath(TextureHandle h, std::string value);
     [[nodiscard]] bool moveTexture(TextureHandle h, std::size_t destination);
     [[nodiscard]] bool eraseTexture(TextureHandle h);
     [[nodiscard]] RigidBodyHandle addRigidBody(PmxRigidBody body);
     [[nodiscard]] bool setRigidBody(RigidBodyHandle h, const PmxRigidBody &body);
+    [[nodiscard]] bool setRigidBodyBone(RigidBodyHandle h, std::optional<BoneHandle> value);
+    [[nodiscard]] bool setRigidBodyShape(RigidBodyHandle h, std::uint8_t shape, Float3 size);
+    [[nodiscard]] bool setRigidBodyTransform(RigidBodyHandle h, Float3 position, Float3 rotation);
+    [[nodiscard]] bool setRigidBodyPhysical(RigidBodyHandle h, float mass, float linearDamping,
+                                             float angularDamping, float restitution, float friction);
+    [[nodiscard]] bool setRigidBodyCollision(RigidBodyHandle h, std::uint8_t group, std::uint16_t mask);
+    [[nodiscard]] bool setRigidBodyMode(RigidBodyHandle h, std::uint8_t mode);
     [[nodiscard]] RigidBodyHandle addRigidBody(RigidBodyDraft draft) {
         draft.value.bone = -1;
         const auto handle = addRigidBody(std::move(draft.value));
@@ -465,6 +528,11 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool eraseRigidBody(RigidBodyHandle h);
     [[nodiscard]] JointHandle addJoint(PmxJoint joint);
     [[nodiscard]] bool setJoint(JointHandle h, const PmxJoint &joint);
+    [[nodiscard]] bool setJointBodies(JointHandle h, RigidBodyHandle bodyA, RigidBodyHandle bodyB);
+    [[nodiscard]] bool setJointTransform(JointHandle h, Float3 position, Float3 rotation);
+    [[nodiscard]] bool setJointLimits(JointHandle h, Float3 translationMinimum, Float3 translationMaximum,
+                                      Float3 rotationMinimum, Float3 rotationMaximum);
+    [[nodiscard]] bool setJointSprings(JointHandle h, Float3 translation, Float3 rotation);
     [[nodiscard]] JointHandle addJoint(JointDraft draft) {
         const auto a = rigidBodies_.index(draft.bodyA), b = rigidBodies_.index(draft.bodyB);
         if (!a || !b) {
@@ -478,9 +546,18 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool eraseJoint(JointHandle h);
     [[nodiscard]] DisplayFrameHandle addDisplayFrame(PmxDisplayFrame frame);
     [[nodiscard]] bool setDisplayFrame(DisplayFrameHandle h, const PmxDisplayFrame &frame);
+    [[nodiscard]] bool setDisplayFrameName(DisplayFrameHandle h, std::string value);
+    [[nodiscard]] bool setDisplayFrameEnglishName(DisplayFrameHandle h, std::string value);
+    [[nodiscard]] bool setDisplayFrameItem(DisplayFrameHandle h, std::size_t index, PmxDisplayItem value);
+    [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, PmxDisplayItem value);
+    [[nodiscard]] bool eraseDisplayFrameItem(DisplayFrameHandle h, std::size_t index);
+    [[nodiscard]] bool moveDisplayFrameItem(DisplayFrameHandle h, std::size_t from, std::size_t to);
     [[nodiscard]] bool eraseDisplayFrame(DisplayFrameHandle h);
     [[nodiscard]] SoftBodyHandle addSoftBody(PmxSoftBody body);
     [[nodiscard]] bool setSoftBody(SoftBodyHandle h, const PmxSoftBody &body);
+    [[nodiscard]] bool setSoftBodyMaterial(SoftBodyHandle h, std::optional<MaterialHandle> value);
+    [[nodiscard]] bool setSoftBodyAnchors(SoftBodyHandle h, std::vector<PmxSoftBodyAnchor> value);
+    [[nodiscard]] bool setSoftBodyPinnedVertices(SoftBodyHandle h, std::vector<std::int32_t> value);
     [[nodiscard]] SoftBodyHandle addSoftBody(SoftBodyDraft draft) {
         draft.value.material = -1;
         if (draft.material) {
@@ -511,6 +588,7 @@ class PmxDocument::Transaction {
     Table<FaceTag> facesTable_;
     std::vector<PmxFace> faces_;
     std::vector<std::string> errors_;
+    PmxTransactionResult::ChangeSet changes_;
     bool done_{};
     [[nodiscard]] bool boneReferenced(std::size_t i) const;
     [[nodiscard]] bool materialReferenced(std::size_t i) const;
