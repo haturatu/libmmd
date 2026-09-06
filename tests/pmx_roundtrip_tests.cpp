@@ -72,6 +72,7 @@ int main() {
     assert(document.resolve(root) != nullptr);
     assert(document.referencesTo(root).size() == 3);
     assert(document.faces().size() == 1);
+    assert(document.referencesTo(document.materialHandle(0)).size() == 1);
     assert(document.referencesTo(document.vertexHandle(0)).size() == 1);
     {
         auto withAllMaterialMorph = model;
@@ -133,6 +134,59 @@ int main() {
         assert(editable.model().morphs[0].name == "b");
         assert(editable.resolve(frame) != nullptr);
         assert(editable.resolve(softBody) != nullptr);
+    }
+    {
+        auto shifted = model;
+        shifted.textures = {{"unused.png"}, {"body.png"}};
+        shifted.materials[0].textureIndex = 1;
+        mmd::PmxDocument editable(std::move(shifted));
+        auto transaction = editable.transaction();
+        assert(transaction.eraseTexture(editable.textureHandle(0)));
+        assert(transaction.commit().committed);
+        assert(editable.model().textures[0].storedPath == "body.png");
+        assert(editable.model().materials[0].textureIndex == 0);
+    }
+    {
+        auto shifted = model;
+        shifted.morphs = {{.name = "unused", .type = 0}, {.name = "shown", .type = 0}};
+        shifted.displayFrames = {{.items = {{.bone = false, .index = 1}}}};
+        mmd::PmxDocument editable(std::move(shifted));
+        auto transaction = editable.transaction();
+        assert(transaction.eraseMorph(editable.morphHandle(0)));
+        assert(transaction.commit().committed);
+        assert(editable.model().displayFrames[0].items[0].index == 0);
+    }
+    {
+        auto shifted = model;
+        shifted.rigidBodies = {{.name = "unused", .bone = 0}, {.name = "used", .bone = 0}};
+        shifted.joints = {{.name = "joint", .bodyA = 1, .bodyB = 1}};
+        mmd::PmxDocument editable(std::move(shifted));
+        auto transaction = editable.transaction();
+        assert(transaction.eraseRigidBody(editable.rigidBodyHandle(0)));
+        assert(transaction.commit().committed);
+        assert(editable.model().joints[0].bodyA == 0);
+        assert(editable.model().joints[0].bodyB == 0);
+    }
+    {
+        auto shifted = model;
+        shifted.materials.push_back({.name = "replacement"});
+        shifted.morphs = {{.name = "all", .type = 8, .offsets = {{.index = -1}}}};
+        mmd::PmxDocument editable(std::move(shifted));
+        auto transaction = editable.transaction();
+        assert(transaction.eraseMaterial(editable.materialHandle(0), editable.materialHandle(1)));
+        assert(transaction.commit().committed);
+        assert(editable.model().materials.size() == 1);
+        assert(editable.model().materials[0].indexCount == 3);
+        assert(editable.model().morphs[0].offsets[0].index == -1);
+    }
+    {
+        mmd::PmxDocument editable(model);
+        auto transaction = editable.transaction();
+        const auto inserted = transaction.insertBone(0, {.name = "inserted", .parent = 0});
+        assert(inserted);
+        assert(transaction.commit().committed);
+        assert(editable.resolve(inserted)->parent == 1);
+        assert(editable.model().vertices[0].bones[0] == 1);
     }
 
     std::filesystem::remove(path);

@@ -33,7 +33,7 @@ enum class ReferenceTargetKind : std::uint8_t { object, none, all };
 enum class ReferenceField : std::uint8_t {
     vertexBone, materialTexture, materialSphereTexture, materialToonTexture, boneParent, boneTail,
     boneInheritParent, boneIkTarget, boneIkLink, morphOffset, displayItem, rigidBodyBone,
-    jointBodyA, jointBodyB, softBodyMaterial, softBodyAnchorRigidBody, softBodyAnchorVertex, softBodyPinnedVertex, faceVertex,
+    jointBodyA, jointBodyB, softBodyMaterial, softBodyAnchorRigidBody, softBodyAnchorVertex, softBodyPinnedVertex, faceVertex, faceMaterial,
 };
 // Identifies a graph edge without storing a vector-invalidated pointer.
 struct ReferenceSite { ReferenceObjectKind ownerKind{}; std::uint64_t ownerId{}; std::uint32_t ownerGeneration{}; ReferenceField field{}; std::uint32_t subIndex{}; ReferenceTargetKind targetKind{ReferenceTargetKind::object}; };
@@ -110,6 +110,8 @@ class PmxDocument::Transaction {
 public:
     explicit Transaction(PmxDocument& d) : document_(d) { document_.ensure(); model_=d.model_; vertices_=d.vertices_; textures_=d.textures_; materials_=d.materials_; bones_=d.bones_; morphs_=d.morphs_; displayFrames_=d.displayFrames_; rigidBodies_=d.rigidBodies_; joints_=d.joints_; softBodies_=d.softBodies_; facesTable_=d.facesTable_; faces_=d.faces_; }
     [[nodiscard]] BoneHandle addBone(PmxBone bone) { return insertBone(model_.bones.size(),std::move(bone)); }
+    // References in bone are interpreted as pre-insertion PMX indices. Prefer
+    // addBone() followed by handle-based setters for new editor code.
     [[nodiscard]] BoneHandle insertBone(std::size_t destination,PmxBone bone);
     [[nodiscard]] bool renameBone(BoneHandle h,std::string name) { const auto i=bones_.index(h); if(!i) return false; model_.bones[*i].name=std::move(name); return true; }
     [[nodiscard]] bool setBoneParent(BoneHandle child,BoneHandle parent) { const auto c=bones_.index(child),p=bones_.index(parent); if(!c||!p||*c==*p) return false; for(auto cursor=*p;;) { if(cursor==*c) return false; const auto next=model_.bones[cursor].parent; if(next<0) break; cursor=static_cast<std::size_t>(next); } model_.bones[*c].parent=static_cast<std::int32_t>(*p); return true; }
