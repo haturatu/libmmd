@@ -581,6 +581,8 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setDisplayFrameName(DisplayFrameHandle h, std::string value);
     [[nodiscard]] bool setDisplayFrameEnglishName(DisplayFrameHandle h, std::string value);
     [[nodiscard]] bool setDisplayFrameItem(DisplayFrameHandle h, std::size_t index, PmxDisplayItem value);
+    [[nodiscard]] bool setDisplayFrameItem(DisplayFrameHandle h, std::size_t index, BoneHandle bone);
+    [[nodiscard]] bool setDisplayFrameItem(DisplayFrameHandle h, std::size_t index, MorphHandle morph);
     [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, PmxDisplayItem value);
     [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, BoneHandle bone);
     [[nodiscard]] bool addDisplayFrameItem(DisplayFrameHandle h, MorphHandle morph);

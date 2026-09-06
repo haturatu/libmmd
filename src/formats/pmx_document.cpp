@@ -1534,6 +1534,20 @@ bool PmxDocument::Transaction::setDisplayFrameItem(DisplayFrameHandle handle, st
     recordHandle(changes_.displayFrames, handle);
     return true;
 }
+bool PmxDocument::Transaction::setDisplayFrameItem(DisplayFrameHandle handle, std::size_t index, BoneHandle bone) {
+    const auto frame = displayFrames_.index(handle);
+    const auto target = bones_.index(bone);
+    if (!frame || !target || index >= model_.displayFrames[*frame].items.size())
+        return false;
+    return setDisplayFrameItem(handle, index, PmxDisplayItem{true, static_cast<std::int32_t>(*target)});
+}
+bool PmxDocument::Transaction::setDisplayFrameItem(DisplayFrameHandle handle, std::size_t index, MorphHandle morph) {
+    const auto frame = displayFrames_.index(handle);
+    const auto target = morphs_.index(morph);
+    if (!frame || !target || index >= model_.displayFrames[*frame].items.size())
+        return false;
+    return setDisplayFrameItem(handle, index, PmxDisplayItem{false, static_cast<std::int32_t>(*target)});
+}
 bool PmxDocument::Transaction::addDisplayFrameItem(DisplayFrameHandle handle, PmxDisplayItem value) {
     return updateValue(displayFrames_, model_.displayFrames, handle, [&](auto &frame) { frame.items.push_back(value); }) &&
            (recordHandle(changes_.displayFrames, handle), true);
