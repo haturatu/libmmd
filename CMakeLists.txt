@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(libmmd VERSION 0.1.2 LANGUAGES CXX)
+project(libmmd VERSION 0.2.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -13,6 +13,11 @@ option(
     ON
 )
 option(LIBMMD_BUILD_TESTS "Build libmmd tests" ${PROJECT_IS_TOP_LEVEL})
+option(
+    LIBMMD_FETCH_DEPENDENCIES
+    "Fetch optional source dependencies when unavailable"
+    OFF
+)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,6 +41,16 @@ target_include_directories(
 )
 target_compile_features(mmd_core PUBLIC cxx_std_20)
 
+add_library(mmd_animation src/animation/animation.cpp)
+set_target_properties(mmd_animation PROPERTIES EXPORT_NAME animation)
+add_library(mmd::animation ALIAS mmd_animation)
+target_link_libraries(mmd_animation PUBLIC mmd_core)
+target_include_directories(mmd_animation PRIVATE src/internal)
+target_compile_definitions(
+    mmd_animation
+    PRIVATE LIBMMD_ENABLE_PHYSICS=$<BOOL:${LIBMMD_ENABLE_PHYSICS}>
+)
+
 if(LIBMMD_ENABLE_PHYSICS)
     add_library(mmd_physics src/physics/physics.cpp)
     set_target_properties(mmd_physics PROPERTIES EXPORT_NAME physics)
@@ -45,6 +60,27 @@ if(LIBMMD_ENABLE_PHYSICS)
     set(LIBMMD_HAS_BULLET 0)
     if(LIBMMD_ENABLE_BULLET)
         find_package(Bullet QUIET)
+        if(NOT Bullet_FOUND AND LIBMMD_FETCH_DEPENDENCIES)
+            set(BUILD_BULLET2_DEMOS OFF CACHE BOOL "" FORCE)
+            set(BUILD_BULLET3 OFF CACHE BOOL "" FORCE)
+            set(BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
+            set(BUILD_CPU_DEMOS OFF CACHE BOOL "" FORCE)
+            set(BUILD_OPENGL3_DEMOS OFF CACHE BOOL "" FORCE)
+            set(BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+            set(USE_GRAPHICAL_BENCHMARK OFF CACHE BOOL "" FORCE)
+            set(INSTALL_LIBS OFF CACHE BOOL "" FORCE)
+            include(FetchContent)
+            FetchContent_Declare(
+                bullet
+                URL
+                    https://github.com/bulletphysics/bullet3/archive/refs/tags/3.25.tar.gz
+                DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            )
+            FetchContent_MakeAvailable(bullet)
+            set(BULLET_INCLUDE_DIRS "${bullet_SOURCE_DIR}/src")
+            set(BULLET_LIBRARIES BulletDynamics BulletCollision LinearMath)
+            set(Bullet_FOUND TRUE)
+        endif()
         if(Bullet_FOUND)
             set(LIBMMD_HAS_BULLET 1)
             target_include_directories(
@@ -60,12 +96,6 @@ if(LIBMMD_ENABLE_PHYSICS)
             LIBMMD_HAS_BULLET=${LIBMMD_HAS_BULLET}
             DAYO_HAS_BULLET=${LIBMMD_HAS_BULLET}
     )
-
-    add_library(mmd_animation src/animation/animation.cpp)
-    set_target_properties(mmd_animation PROPERTIES EXPORT_NAME animation)
-    add_library(mmd::animation ALIAS mmd_animation)
-    target_link_libraries(mmd_animation PUBLIC mmd_core mmd_physics)
-    target_include_directories(mmd_animation PRIVATE src/internal)
 endif()
 
 if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
@@ -76,13 +106,13 @@ endif()
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(
-    TARGETS mmd_core
+    TARGETS mmd_core mmd_animation
     EXPORT libmmdTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 if(TARGET mmd_physics)
     install(
-        TARGETS mmd_physics mmd_animation
+        TARGETS mmd_physics
         EXPORT libmmdTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
