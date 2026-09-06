@@ -238,6 +238,67 @@ ValidationResult PmxDocument::validate() const {
             issue.location.generation = handle.generation;
             issue.location.field = field;
         };
+        if (issue.location.kind != ReferenceObjectKind::model) {
+            const auto index = static_cast<std::size_t>(issue.location.subIndex);
+            switch (issue.location.kind) {
+            case ReferenceObjectKind::vertex:
+                if (index < vertices_.slots.size()) {
+                    assign(ReferenceObjectKind::vertex, "vertex", vertices_.at(index), "vertex");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::material:
+                if (index < materials_.slots.size()) {
+                    assign(ReferenceObjectKind::material, "material", materials_.at(index), "material");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::bone:
+                if (index < bones_.slots.size()) {
+                    assign(ReferenceObjectKind::bone, "bone", bones_.at(index), "bone");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::morph:
+                if (index < morphs_.slots.size()) {
+                    assign(ReferenceObjectKind::morph, "morph", morphs_.at(index), "morph");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::displayFrame:
+                if (index < displayFrames_.slots.size()) {
+                    assign(ReferenceObjectKind::displayFrame, "displayFrame", displayFrames_.at(index), "displayFrame");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::rigidBody:
+                if (index < rigidBodies_.slots.size()) {
+                    assign(ReferenceObjectKind::rigidBody, "rigidBody", rigidBodies_.at(index), "rigidBody");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::joint:
+                if (index < joints_.slots.size()) {
+                    assign(ReferenceObjectKind::joint, "joint", joints_.at(index), "joint");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::softBody:
+                if (index < softBodies_.slots.size()) {
+                    assign(ReferenceObjectKind::softBody, "softBody", softBodies_.at(index), "softBody");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::face:
+                if (index < facesTable_.slots.size()) {
+                    assign(ReferenceObjectKind::face, "face", facesTable_.at(index), "face");
+                    continue;
+                }
+                break;
+            case ReferenceObjectKind::model:
+                break;
+            }
+        }
         if ((issue.message.find("vertex") != std::string::npos || issue.message.find("QDEF") != std::string::npos ||
              issue.message.find("weight") != std::string::npos || issue.message.find("non-finite") != std::string::npos) &&
             !vertices_.slots.empty())
