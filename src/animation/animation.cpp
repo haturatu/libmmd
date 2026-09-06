@@ -525,7 +525,9 @@ bool ikEnabledAt(const VmdMotion *motion, std::string_view name, float frame) {
 
 void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
              const VmdMotion *motion, float frame, std::vector<LocalPose> &localScratch,
-             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState) {
+             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState, bool enabled) {
+    if (!enabled)
+        return;
     for (const auto ikIndex : order) {
         const auto &ik = model.bones[ikIndex];
         if ((ik.flags & 0x0020U) == 0 || ik.ikTarget < 0 || static_cast<std::size_t>(ik.ikTarget) >= poses.size() ||
@@ -763,6 +765,10 @@ void MmdAnimator::setPhysics(MmdPhysics *physics) {
     previousFrame_ = -1.0F;
 }
 
+void MmdAnimator::setIkEnabled(bool enabled) noexcept {
+    ikEnabled_ = enabled;
+}
+
 MotionCompatibility MmdAnimator::motionCompatibility() const {
     MotionCompatibility result;
     result.pmxBoneCount = model_.bones.size();
@@ -946,7 +952,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.beforePhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState);
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState);
+            impl_->globalState, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
     for (std::size_t i = 0; i < global.size(); ++i)
@@ -1067,7 +1073,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.afterPhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState);
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState);
+            impl_->globalState, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;
         global[i] = poses[i].global;

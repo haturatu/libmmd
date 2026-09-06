@@ -61,6 +61,7 @@ class MmdAnimator {
     void setMotion(const VmdMotion *motion);
     void setPose(const VpdPose *pose);
     void setPhysics(MmdPhysics *physics);
+    void setIkEnabled(bool enabled) noexcept;
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
     [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false);
 
@@ -70,6 +71,7 @@ class MmdAnimator {
     const VmdMotion *motion_{};
     const VpdPose *pose_{};
     MmdPhysics *physics_{};
+    bool ikEnabled_{true};
     float previousFrame_{-1.0F};
     std::unique_ptr<Impl> impl_;
 };
