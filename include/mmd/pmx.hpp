@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -21,6 +22,26 @@ struct PmxMetadata {
     std::int32_t vertexCount{};
     std::uint8_t textEncoding{};
     std::uint8_t additionalUvCount{};
+};
+
+enum class PmxTextEncoding : std::uint8_t { utf16le = 0, utf8 = 1 };
+
+struct PmxFormat {
+    float version{2.0F};
+    PmxTextEncoding textEncoding{PmxTextEncoding::utf8};
+    std::uint8_t additionalUvCount{};
+    std::uint8_t vertexIndexSize{4};
+    std::uint8_t textureIndexSize{4};
+    std::uint8_t materialIndexSize{4};
+    std::uint8_t boneIndexSize{4};
+    std::uint8_t morphIndexSize{4};
+    std::uint8_t rigidBodyIndexSize{4};
+};
+
+struct PmxTexture {
+    // Exact logical spelling stored in the PMX file. Never replace this with
+    // a resolved absolute path: it is part of preservation-mode serialization.
+    std::string storedPath;
 };
 
 enum class PmxWeightType : std::uint8_t { bdef1, bdef2, bdef4, sdef, qdef };
@@ -186,11 +207,12 @@ struct PmxSoftBody {
 };
 
 struct PmxModel {
+    PmxFormat format;
     PmxMetadata metadata;
     std::filesystem::path sourcePath;
     std::vector<PmxVertex> vertices;
     std::vector<std::uint32_t> indices;
-    std::vector<std::filesystem::path> textures;
+    std::vector<PmxTexture> textures;
     std::vector<PmxMaterial> materials;
     std::vector<PmxBone> bones;
     std::vector<PmxMorph> morphs;
@@ -206,17 +228,29 @@ struct PmxMesh {
     std::vector<std::uint32_t> indices;
 };
 
+enum class ValidationSeverity : std::uint8_t { info, warning, error, fatal };
+enum class ValidationCode : std::uint16_t { generic, invalid_format, invalid_reference, material_range, bone_cycle };
+struct ValidationIssue { ValidationSeverity severity{ValidationSeverity::error}; ValidationCode code{ValidationCode::generic}; std::string object; std::string message; };
 struct ValidationResult {
-    std::vector<std::string> errors;
-    [[nodiscard]] bool valid() const noexcept { return errors.empty(); }
+    std::vector<ValidationIssue> issues;
+    [[nodiscard]] bool valid() const noexcept {
+        return std::none_of(issues.begin(), issues.end(),
+                            [](const auto& issue) { return issue.severity >= ValidationSeverity::error; });
+    }
 };
+
+enum class PmxSaveMode : std::uint8_t { preserve, canonical };
+struct PmxSaveOptions { PmxSaveMode mode{PmxSaveMode::preserve}; };
+struct PmxSaveReport { bool changedEncoding{}; bool widenedVertexIndex{}; bool widenedTextureIndex{}; bool widenedMaterialIndex{}; bool widenedBoneIndex{}; bool widenedMorphIndex{}; bool widenedRigidBodyIndex{}; };
 
 namespace pmx {
 [[nodiscard]] PmxMetadata probe(const std::filesystem::path& path);
 [[nodiscard]] PmxModel load(const std::filesystem::path& path);
 [[nodiscard]] PmxMesh loadMesh(const std::filesystem::path& path);
-void save(const std::filesystem::path& path, const PmxModel& model);
+[[nodiscard]] PmxSaveReport save(const std::filesystem::path& path, const PmxModel& model,
+                                 PmxSaveOptions options = {});
 [[nodiscard]] ValidationResult validate(const PmxModel& model);
+[[nodiscard]] std::filesystem::path resolveTexturePath(const PmxModel& model, std::size_t textureIndex);
 } // namespace pmx
 
 } // namespace mmd

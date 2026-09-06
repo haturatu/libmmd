@@ -1,5 +1,6 @@
 #include <mmd/pmx.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -11,6 +12,26 @@
 
 namespace mmd {
 namespace {
+
+thread_local PmxTextEncoding outputEncoding = PmxTextEncoding::utf8;
+
+std::string utf8ToUtf16Le(std::string_view value) {
+    std::string output;
+    for (std::size_t index = 0; index < value.size();) {
+        const auto lead = static_cast<unsigned char>(value[index++]);
+        std::uint32_t codepoint = lead;
+        std::size_t trailing = 0;
+        if ((lead & 0xe0U) == 0xc0U) { codepoint = lead & 0x1fU; trailing = 1; }
+        else if ((lead & 0xf0U) == 0xe0U) { codepoint = lead & 0x0fU; trailing = 2; }
+        else if ((lead & 0xf8U) == 0xf0U) { codepoint = lead & 0x07U; trailing = 3; }
+        for (std::size_t i = 0; i < trailing && index < value.size(); ++i)
+            codepoint = (codepoint << 6U) | (static_cast<unsigned char>(value[index++]) & 0x3fU);
+        const auto append = [&output](std::uint16_t unit) { output.push_back(static_cast<char>(unit)); output.push_back(static_cast<char>(unit >> 8U)); };
+        if (codepoint <= 0xffffU) append(static_cast<std::uint16_t>(codepoint));
+        else { codepoint -= 0x10000U; append(static_cast<std::uint16_t>(0xd800U + (codepoint >> 10U))); append(static_cast<std::uint16_t>(0xdc00U + (codepoint & 0x3ffU))); }
+    }
+    return output;
+}
 
 template <typename T> void write(std::ostream& output, const T& value, std::string_view field) {
     static_assert(std::is_trivially_copyable_v<T>);
@@ -26,10 +47,11 @@ template <std::size_t N> void writeArray(std::ostream& output, const std::array<
 }
 
 void writeText(std::ostream& output, std::string_view value, std::string_view field) {
-    if (value.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+    const auto encoded = outputEncoding == PmxTextEncoding::utf16le ? utf8ToUtf16Le(value) : std::string(value);
+    if (encoded.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
         throw std::runtime_error("PMX text is too long: " + std::string(field));
-    write(output, static_cast<std::int32_t>(value.size()), field);
-    output.write(value.data(), static_cast<std::streamsize>(value.size()));
+    write(output, static_cast<std::int32_t>(encoded.size()), field);
+    output.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
     if (!output)
         throw std::runtime_error("failed while writing PMX " + std::string(field));
 }
@@ -60,7 +82,7 @@ template <std::size_t N> bool finite(const std::array<float, N>& values) {
 
 void addError(ValidationResult& result, bool condition, std::string message) {
     if (!condition)
-        result.errors.push_back(std::move(message));
+        result.issues.push_back({ValidationSeverity::error, ValidationCode::generic, {}, std::move(message)});
 }
 
 } // namespace
@@ -132,18 +154,22 @@ ValidationResult pmx::validate(const PmxModel& model) {
     return result;
 }
 
-void pmx::save(const std::filesystem::path& path, const PmxModel& model) {
+PmxSaveReport pmx::save(const std::filesystem::path& path, const PmxModel& model, PmxSaveOptions options) {
     const auto validation = validate(model);
     if (!validation.valid())
-        throw std::runtime_error("cannot save invalid PMX: " + validation.errors.front());
+        throw std::runtime_error("cannot save invalid PMX: " + validation.issues.front().message);
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output)
         throw std::runtime_error("cannot open PMX for writing: " + path.string());
 
     output.write("PMX ", 4);
-    write(output, model.metadata.version, "version");
+    const auto version = options.mode == PmxSaveMode::preserve ? model.format.version : model.metadata.version;
+    write(output, version, "version");
     write(output, std::uint8_t{8}, "header size");
-    const std::array<std::uint8_t, 8> settings{1, model.metadata.additionalUvCount, 4, 4, 4, 4, 4, 4};
+    const auto encoding = options.mode == PmxSaveMode::preserve ? static_cast<std::uint8_t>(model.format.textEncoding)
+                                                                 : std::uint8_t{1};
+    outputEncoding = static_cast<PmxTextEncoding>(encoding);
+    const std::array<std::uint8_t, 8> settings{encoding, model.metadata.additionalUvCount, 4, 4, 4, 4, 4, 4};
     output.write(reinterpret_cast<const char*>(settings.data()), static_cast<std::streamsize>(settings.size()));
     writeText(output, model.metadata.modelName, "model name");
     writeText(output, model.metadata.englishName, "English model name");
@@ -180,7 +206,7 @@ void pmx::save(const std::filesystem::path& path, const PmxModel& model) {
     writeCount(output, model.indices.size(), "index count");
     for (const auto index : model.indices) writeVertexIndex(output, index, "vertex index");
     writeCount(output, model.textures.size(), "texture count");
-    for (const auto& texture : model.textures) writeText(output, texture.generic_string(), "texture");
+    for (const auto& texture : model.textures) writeText(output, texture.storedPath, "texture");
     writeCount(output, model.materials.size(), "material count");
     for (const auto& material : model.materials) {
         writeText(output, material.name, "material name"); writeText(output, material.englishName, "material English name");
@@ -222,6 +248,16 @@ void pmx::save(const std::filesystem::path& path, const PmxModel& model) {
         writeCount(output, model.softBodies.size(), "soft body count");
         for (const auto& body : model.softBodies) { writeText(output, body.name, "soft body name"); writeText(output, body.englishName, "soft body English name"); write(output, body.shape, "soft body shape"); writeIndex(output, body.material, "soft body material"); write(output, body.group, "soft body group"); write(output, body.collisionMask, "soft body collision mask"); write(output, body.flags, "soft body flags"); write(output, body.bendingLinkDistance, "soft body bending distance"); write(output, body.clusterCount, "soft body cluster count"); write(output, body.totalMass, "soft body mass"); write(output, body.collisionMargin, "soft body margin"); write(output, body.aeroModel, "soft body aero model"); writeArray(output, body.config, "soft body config"); writeArray(output, body.cluster, "soft body cluster"); for (const auto value : body.iteration) write(output, value, "soft body iteration"); writeArray(output, body.materialConfig, "soft body material config"); writeCount(output, body.anchors.size(), "soft body anchor count"); for (const auto& anchor : body.anchors) { writeIndex(output, anchor.rigidBody, "soft body anchor body"); writeVertexIndex(output, static_cast<std::uint32_t>(anchor.vertex), "soft body anchor vertex"); write(output, static_cast<std::uint8_t>(anchor.nearMode), "soft body anchor mode"); } writeCount(output, body.pinnedVertices.size(), "soft body pin count"); for (const auto vertex : body.pinnedVertices) writeVertexIndex(output, static_cast<std::uint32_t>(vertex), "soft body pin vertex"); }
     }
+    outputEncoding = PmxTextEncoding::utf8;
+    return {.changedEncoding = options.mode == PmxSaveMode::canonical && model.format.textEncoding != PmxTextEncoding::utf8};
+}
+
+std::filesystem::path pmx::resolveTexturePath(const PmxModel& model, std::size_t textureIndex) {
+    if (textureIndex >= model.textures.size())
+        throw std::out_of_range("PMX texture index is out of range");
+    auto stored = model.textures[textureIndex].storedPath;
+    std::replace(stored.begin(), stored.end(), '\\', '/');
+    return (model.sourcePath.parent_path() / std::filesystem::u8path(stored)).lexically_normal();
 }
 
 } // namespace mmd
