@@ -2,8 +2,8 @@
 
 #define LIBMMD_VERSION_MAJOR 0
 #define LIBMMD_VERSION_MINOR 1
-#define LIBMMD_VERSION_PATCH 0
+#define LIBMMD_VERSION_PATCH 1
 
 namespace mmd {
-inline constexpr const char* version = "0.1.0";
+inline constexpr const char* version = "0.1.1";
 }

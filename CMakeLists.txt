@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(libmmd VERSION 0.1.0 LANGUAGES CXX)
+project(libmmd VERSION 0.1.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -8,6 +8,7 @@ include(CTest)
 
 option(LIBMMD_ENABLE_PHYSICS "Build the optional MMD physics module" ON)
 option(LIBMMD_ENABLE_BULLET "Enable Bullet acceleration for the physics module when available" ON)
+option(LIBMMD_BUILD_TESTS "Build libmmd tests" ${PROJECT_IS_TOP_LEVEL})
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -53,7 +54,7 @@ if(LIBMMD_ENABLE_PHYSICS)
   target_include_directories(mmd_animation PRIVATE src/internal)
 endif()
 
-if(BUILD_TESTING)
+if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
   add_executable(libmmd_pmx_roundtrip_tests tests/pmx_roundtrip_tests.cpp)
   target_link_libraries(libmmd_pmx_roundtrip_tests PRIVATE mmd::core)
   add_test(NAME pmx_roundtrip COMMAND libmmd_pmx_roundtrip_tests)
