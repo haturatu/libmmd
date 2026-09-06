@@ -251,6 +251,19 @@ void PmxDocument::remapBoneReferences(PmxModel &model, const std::vector<std::in
         remap(b.bone);
 }
 
+void PmxDocument::remapMaterialReferences(PmxModel &model, const std::vector<std::int32_t> &map) {
+    const auto remap = [&](std::int32_t &x) {
+        if (x >= 0)
+            x = map[static_cast<std::size_t>(x)];
+    };
+    for (auto &morph : model.morphs)
+        if (morph.type == 8)
+            for (auto &offset : morph.offsets)
+                remap(offset.index);
+    for (auto &body : model.softBodies)
+        remap(body.material);
+}
+
 EraseImpact PmxDocument::Transaction::analyzeErase(BoneHandle handle) const {
     EraseImpact impact;
     const auto target = bones_.index(handle);
@@ -357,8 +370,12 @@ bool PmxDocument::Transaction::eraseMaterial(MaterialHandle h) {
         errors_.push_back("cannot erase referenced material");
         return false;
     }
+    std::vector<std::int32_t> map(model_.materials.size());
+    for (std::size_t i = 0; i < map.size(); ++i)
+        map[i] = i < *target ? static_cast<std::int32_t>(i) : i == *target ? -1 : static_cast<std::int32_t>(i - 1);
     model_.materials.erase(model_.materials.begin() + static_cast<std::ptrdiff_t>(*target));
     materials_.slots.erase(materials_.slots.begin() + static_cast<std::ptrdiff_t>(*target));
+    PmxDocument::remapMaterialReferences(model_, map);
     return true;
 }
 PmxTransactionResult PmxDocument::Transaction::commit() {

@@ -221,19 +221,19 @@ class PmxDocument {
     }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(VertexHandle h) const;
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(TextureHandle h) const {
-        return lookup(h, refs_.textures);
+        return lookup(h, textures_, refs_.textures);
     }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(MaterialHandle h) const {
-        return lookup(h, refs_.materials);
+        return lookup(h, materials_, refs_.materials);
     }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(BoneHandle h) const {
-        return lookup(h, refs_.bones);
+        return lookup(h, bones_, refs_.bones);
     }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(MorphHandle h) const {
-        return lookup(h, refs_.morphs);
+        return lookup(h, morphs_, refs_.morphs);
     }
     [[nodiscard]] std::vector<ReferenceSite> referencesTo(RigidBodyHandle h) const {
-        return lookup(h, refs_.rigidBodies);
+        return lookup(h, rigidBodies_, refs_.rigidBodies);
     }
     [[nodiscard]] std::vector<ReferenceSite> allMaterialReferences() const {
         ensure();
@@ -262,9 +262,11 @@ class PmxDocument {
         return i ? &values[*i] : nullptr;
     }
     template <typename Tag>
-    std::vector<ReferenceSite> lookup(PmxHandle<Tag> h,
+    std::vector<ReferenceSite> lookup(PmxHandle<Tag> h, const Table<Tag> &table,
                                       const std::unordered_map<std::uint64_t, std::vector<ReferenceSite>> &map) const {
         ensure();
+        if (!table.index(h))
+            return {};
         const auto i = map.find(h.id);
         return i == map.end() ? std::vector<ReferenceSite>{} : i->second;
     }
@@ -275,6 +277,7 @@ class PmxDocument {
     void rebuildIndexes();
     void rebuildReferences();
     static void remapBoneReferences(PmxModel &model, const std::vector<std::int32_t> &map);
+    static void remapMaterialReferences(PmxModel &model, const std::vector<std::int32_t> &map);
     friend class Transaction;
 };
 

@@ -71,6 +71,9 @@ int main() {
     const auto root = document.boneHandle(0);
     assert(document.resolve(root) != nullptr);
     assert(document.referencesTo(root).size() == 3);
+    auto staleRoot = root;
+    ++staleRoot.generation;
+    assert(document.referencesTo(staleRoot).empty());
     assert(document.faces().size() == 1);
     assert(document.referencesTo(document.vertexHandle(0)).size() == 1);
     {
@@ -98,6 +101,23 @@ int main() {
         assert(result.committed);
         assert(document.resolve(root)->name == "root");
         assert(document.model().vertices[0].bones[0] == 1);
+    }
+    {
+        auto materialReferences = model;
+        materialReferences.metadata.version = 2.1F;
+        materialReferences.materials = {
+            {.name = "unused", .indexCount = 0},
+            {.name = "soft body", .indexCount = 3},
+            {.name = "morph", .indexCount = 0},
+        };
+        materialReferences.morphs = {{.name = "material", .type = 8, .offsets = {{.index = 2}}}};
+        materialReferences.softBodies = {{.name = "soft body", .material = 1}};
+        mmd::PmxDocument editable(std::move(materialReferences));
+        auto transaction = editable.transaction();
+        assert(transaction.eraseMaterial(editable.materialHandle(0)));
+        assert(transaction.commit().committed);
+        assert(editable.model().softBodies[0].material == 0);
+        assert(editable.model().morphs[0].offsets[0].index == 1);
     }
 
     std::filesystem::remove(path);
