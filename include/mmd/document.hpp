@@ -14,10 +14,12 @@
 namespace mmd {
 
 template <typename Tag> struct PmxHandle {
+    // Handles are only valid in the document that issued their domain.
+    std::uint64_t domain{};
     std::uint64_t id{};
     std::uint32_t generation{};
     [[nodiscard]] explicit constexpr operator bool() const noexcept {
-        return id != 0;
+        return domain != 0 && id != 0;
     }
     auto operator<=>(const PmxHandle &) const = default;
 };
@@ -147,6 +149,7 @@ class PmxDocument {
         std::uint32_t generation{1};
     };
     template <typename Tag> struct Table {
+        std::uint64_t domain{};
         std::uint64_t nextId{1};
         std::vector<Slot<Tag>> slots;
         mutable std::unordered_map<std::uint64_t, std::size_t> indexById;
@@ -164,9 +167,11 @@ class PmxDocument {
             rebuildIndex();
         }
         [[nodiscard]] PmxHandle<Tag> at(std::size_t i) const {
-            return i < slots.size() ? PmxHandle<Tag>{slots[i].id, slots[i].generation} : PmxHandle<Tag>{};
+            return i < slots.size() ? PmxHandle<Tag>{domain, slots[i].id, slots[i].generation} : PmxHandle<Tag>{};
         }
         [[nodiscard]] std::optional<std::size_t> index(PmxHandle<Tag> h) const {
+            if (h.domain != domain)
+                return std::nullopt;
             auto found = indexById.find(h.id);
             if (found != indexById.end() && found->second < slots.size() && slots[found->second].id == h.id &&
                 slots[found->second].generation == h.generation)
@@ -175,7 +180,8 @@ class PmxDocument {
                 rebuildIndex();
                 found = indexById.find(h.id);
             }
-            if (found == indexById.end() || slots[found->second].generation != h.generation)
+            if (found == indexById.end() || slots[found->second].id != h.id ||
+                slots[found->second].generation != h.generation)
                 return std::nullopt;
             return found->second;
         }
@@ -212,12 +218,10 @@ class PmxDocument {
 
   public:
     class Transaction;
-    PmxDocument() {
-        rebuildIndexes();
-    }
-    explicit PmxDocument(PmxModel model) : model_(std::move(model)) {
-        rebuildIndexes();
-    }
+    PmxDocument();
+    explicit PmxDocument(PmxModel model);
+    PmxDocument(const PmxDocument &other);
+    PmxDocument &operator=(const PmxDocument &other);
     [[nodiscard]] const PmxModel &model() const noexcept {
         return model_;
     }
@@ -337,6 +341,7 @@ class PmxDocument {
 
   private:
     PmxModel model_;
+    std::uint64_t domain_{};
     mutable bool dirty_{};
     mutable Table<VertexTag> vertices_;
     mutable Table<TextureTag> textures_;
@@ -350,6 +355,7 @@ class PmxDocument {
     mutable Table<FaceTag> facesTable_;
     mutable std::vector<PmxFace> faces_;
     mutable ReferenceIndex refs_;
+    static std::uint64_t allocateDomain() noexcept;
     template <typename T, typename Tag>
     static const T *resolve(const std::vector<T> &values, const Table<Tag> &table, PmxHandle<Tag> h) {
         const auto i = table.index(h);
@@ -410,7 +416,8 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setBoneTailOffset(BoneHandle bone, Float3 offset);
     [[nodiscard]] bool setBoneInherit(BoneHandle bone, std::optional<BoneHandle> parent, float ratio, bool rotation,
                                       bool translation);
-    [[nodiscard]] bool setBoneIkTarget(BoneHandle bone, BoneHandle target);
+    // Passing nullopt disables IK and discards any serialized IK links.
+    [[nodiscard]] bool setBoneIkTarget(BoneHandle bone, std::optional<BoneHandle> target);
     [[nodiscard]] bool addBoneIkLink(BoneHandle bone, BoneIkLinkDraft link);
     [[nodiscard]] bool eraseBoneIkLink(BoneHandle bone, std::size_t index);
     [[nodiscard]] EraseImpact analyzeErase(BoneHandle h) const;
