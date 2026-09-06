@@ -1,6 +1,8 @@
 #include <mmd/document.hpp>
 
 #include <atomic>
+#include <cmath>
+#include <iterator>
 
 namespace mmd {
 namespace {
@@ -163,12 +165,16 @@ void PmxDocument::restoreSnapshot(const PmxDocument &snapshot, std::uint64_t tar
     rebuildReferences();
 }
 
-PmxTransactionResult PmxDocument::finishPropertyEdit(PmxChangeSet changes) {
-    auto validation = pmx::validate(model_);
+PmxTransactionResult PmxDocument::finishPropertyEdit(PmxChangeSet changes, ReferenceObjectKind kind,
+                                                     std::size_t index) {
+    auto validation = kind == ReferenceObjectKind::model ? pmx::validate(model_) : validateProperty(kind, index);
     if (!validation.valid())
         return {false, std::move(validation), {}, {}};
     dirty_ = false;
-    rebuildReferences();
+    if (kind == ReferenceObjectKind::model)
+        rebuildReferences();
+    else
+        rebuildReferencesFor(kind, index);
     return {true, std::move(validation), {}, std::move(changes)};
 }
 
@@ -191,7 +197,7 @@ PmxTransactionResult PmxDocument::replaceVertex(VertexHandle handle, const PmxVe
     model_.vertices[*index] = vertex;
     PmxChangeSet changes;
     changes.vertices.push_back(handle);
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::vertex, *index);
     if (!result.committed)
         model_.vertices[*index] = before;
     return result;
@@ -202,15 +208,12 @@ PmxTransactionResult PmxDocument::replaceTexture(TextureHandle handle, const Pmx
     const auto index = textures_.index(handle);
     if (!index)
         return {false, {}, {"invalid texture handle"}, {}};
-    const auto before = model_.textures[*index];
     model_.textures[*index] = texture;
     PmxChangeSet changes;
     changes.textures.push_back(handle);
     changes.texturesChanged = true;
-    auto result = finishPropertyEdit(std::move(changes));
-    if (!result.committed)
-        model_.textures[*index] = before;
-    return result;
+    dirty_ = false;
+    return {true, {}, {}, std::move(changes)};
 }
 
 PmxTransactionResult PmxDocument::replaceMaterial(MaterialHandle handle, const PmxMaterial &material) {
@@ -219,13 +222,15 @@ PmxTransactionResult PmxDocument::replaceMaterial(MaterialHandle handle, const P
     if (!index)
         return {false, {}, {"invalid material handle"}, {}};
     const auto before = model_.materials[*index];
+    if (before.indexCount != material.indexCount)
+        return {false, {}, {"material index coverage is a structural edit"}, {}};
     model_.materials[*index] = material;
     PmxChangeSet changes;
     changes.materials.push_back(handle);
     changes.texturesChanged = before.textureIndex != material.textureIndex ||
                               before.sphereTextureIndex != material.sphereTextureIndex ||
                               before.toonTextureIndex != material.toonTextureIndex;
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::material, *index);
     if (!result.committed)
         model_.materials[*index] = before;
     return result;
@@ -240,7 +245,7 @@ PmxTransactionResult PmxDocument::replaceBone(BoneHandle handle, const PmxBone &
     model_.bones[*index] = bone;
     PmxChangeSet changes;
     changes.bones.push_back(handle);
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::bone, *index);
     if (!result.committed)
         model_.bones[*index] = before;
     return result;
@@ -255,7 +260,7 @@ PmxTransactionResult PmxDocument::replaceMorph(MorphHandle handle, const PmxMorp
     model_.morphs[*index] = morph;
     PmxChangeSet changes;
     changes.morphs.push_back(handle);
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::morph, *index);
     if (!result.committed)
         model_.morphs[*index] = before;
     return result;
@@ -270,7 +275,7 @@ PmxTransactionResult PmxDocument::replaceDisplayFrame(DisplayFrameHandle handle,
     model_.displayFrames[*index] = frame;
     PmxChangeSet changes;
     changes.displayFrames.push_back(handle);
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::displayFrame, *index);
     if (!result.committed)
         model_.displayFrames[*index] = before;
     return result;
@@ -286,7 +291,7 @@ PmxTransactionResult PmxDocument::replaceRigidBody(RigidBodyHandle handle, const
     PmxChangeSet changes;
     changes.rigidBodies.push_back(handle);
     changes.physicsChanged = true;
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::rigidBody, *index);
     if (!result.committed)
         model_.rigidBodies[*index] = before;
     return result;
@@ -302,7 +307,7 @@ PmxTransactionResult PmxDocument::replaceJoint(JointHandle handle, const PmxJoin
     PmxChangeSet changes;
     changes.joints.push_back(handle);
     changes.physicsChanged = true;
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::joint, *index);
     if (!result.committed)
         model_.joints[*index] = before;
     return result;
@@ -318,7 +323,7 @@ PmxTransactionResult PmxDocument::replaceSoftBody(SoftBodyHandle handle, const P
     PmxChangeSet changes;
     changes.softBodies.push_back(handle);
     changes.physicsChanged = true;
-    auto result = finishPropertyEdit(std::move(changes));
+    auto result = finishPropertyEdit(std::move(changes), ReferenceObjectKind::softBody, *index);
     if (!result.committed)
         model_.softBodies[*index] = before;
     return result;
@@ -469,6 +474,250 @@ void PmxDocument::rebuildReferences() {
             refs_.materials[material.id].push_back(
                 {ReferenceObjectKind::face, faceOwner.id, faceOwner.generation, ReferenceField::faceMaterial, 0});
     }
+}
+
+void PmxDocument::rebuildReferencesFor(ReferenceObjectKind kind, std::size_t index) {
+    std::uint64_t ownerId{};
+    std::uint32_t ownerGeneration{};
+    const auto identify = [&](const auto &table) {
+        const auto handle = table.at(index);
+        ownerId = handle.id;
+        ownerGeneration = handle.generation;
+    };
+    switch (kind) {
+    case ReferenceObjectKind::vertex: identify(vertices_); break;
+    case ReferenceObjectKind::material: identify(materials_); break;
+    case ReferenceObjectKind::bone: identify(bones_); break;
+    case ReferenceObjectKind::morph: identify(morphs_); break;
+    case ReferenceObjectKind::displayFrame: identify(displayFrames_); break;
+    case ReferenceObjectKind::rigidBody: identify(rigidBodies_); break;
+    case ReferenceObjectKind::joint: identify(joints_); break;
+    case ReferenceObjectKind::softBody: identify(softBodies_); break;
+    default: rebuildReferences(); return;
+    }
+    const auto removeOwner = [&](auto &map) {
+        for (auto iterator = map.begin(); iterator != map.end();) {
+            auto &sites = iterator->second;
+            std::erase_if(sites, [&](const auto &site) {
+                return site.ownerKind == kind && site.ownerId == ownerId &&
+                       site.ownerGeneration == ownerGeneration;
+            });
+            iterator = sites.empty() ? map.erase(iterator) : std::next(iterator);
+        }
+    };
+    removeOwner(refs_.vertices);
+    removeOwner(refs_.textures);
+    removeOwner(refs_.materials);
+    removeOwner(refs_.bones);
+    removeOwner(refs_.morphs);
+    removeOwner(refs_.rigidBodies);
+    std::erase_if(refs_.allMaterials, [&](const auto &site) {
+        return site.ownerKind == kind && site.ownerId == ownerId &&
+               site.ownerGeneration == ownerGeneration;
+    });
+
+    if (kind == ReferenceObjectKind::vertex) {
+        const auto &value = model_.vertices[index];
+        const auto count = value.weightType == PmxWeightType::bdef1 ? 1U
+                           : value.weightType == PmxWeightType::bdef2 || value.weightType == PmxWeightType::sdef ? 2U : 4U;
+        for (std::size_t subIndex = 0; subIndex < count; ++subIndex)
+            addReference(refs_.bones, bones_, value.bones[subIndex], kind, ownerId, ownerGeneration,
+                         ReferenceField::vertexBone, static_cast<std::uint32_t>(subIndex));
+    } else if (kind == ReferenceObjectKind::material) {
+        const auto &value = model_.materials[index];
+        addReference(refs_.textures, textures_, value.textureIndex, kind, ownerId, ownerGeneration,
+                     ReferenceField::materialTexture);
+        addReference(refs_.textures, textures_, value.sphereTextureIndex, kind, ownerId, ownerGeneration,
+                     ReferenceField::materialSphereTexture);
+        if (value.toonMode == 0)
+            addReference(refs_.textures, textures_, value.toonTextureIndex, kind, ownerId, ownerGeneration,
+                         ReferenceField::materialToonTexture);
+    } else if (kind == ReferenceObjectKind::bone) {
+        const auto &value = model_.bones[index];
+        addReference(refs_.bones, bones_, value.parent, kind, ownerId, ownerGeneration, ReferenceField::boneParent);
+        if ((value.flags & 1U) != 0)
+            addReference(refs_.bones, bones_, value.tailBone, kind, ownerId, ownerGeneration, ReferenceField::boneTail);
+        if ((value.flags & 0x0300U) != 0)
+            addReference(refs_.bones, bones_, value.inheritParent, kind, ownerId, ownerGeneration,
+                         ReferenceField::boneInheritParent);
+        if ((value.flags & 0x0020U) != 0) {
+            addReference(refs_.bones, bones_, value.ikTarget, kind, ownerId, ownerGeneration,
+                         ReferenceField::boneIkTarget);
+            for (std::size_t subIndex = 0; subIndex < value.ikLinks.size(); ++subIndex)
+                addReference(refs_.bones, bones_, value.ikLinks[subIndex].bone, kind, ownerId, ownerGeneration,
+                             ReferenceField::boneIkLink, static_cast<std::uint32_t>(subIndex));
+        }
+    } else if (kind == ReferenceObjectKind::morph) {
+        const auto &value = model_.morphs[index];
+        for (std::size_t subIndex = 0; subIndex < value.offsets.size(); ++subIndex) {
+            const auto target = value.offsets[subIndex].index;
+            if (value.type == 0 || value.type == 9)
+                addReference(refs_.morphs, morphs_, target, kind, ownerId, ownerGeneration,
+                             ReferenceField::morphOffset, static_cast<std::uint32_t>(subIndex));
+            else if (value.type == 2)
+                addReference(refs_.bones, bones_, target, kind, ownerId, ownerGeneration,
+                             ReferenceField::morphOffset, static_cast<std::uint32_t>(subIndex));
+            else if (value.type == 8) {
+                if (target == -1)
+                    refs_.allMaterials.push_back({kind, ownerId, ownerGeneration, ReferenceField::morphOffset,
+                                                  static_cast<std::uint32_t>(subIndex), ReferenceTargetKind::all});
+                else
+                    addReference(refs_.materials, materials_, target, kind, ownerId, ownerGeneration,
+                                 ReferenceField::morphOffset, static_cast<std::uint32_t>(subIndex));
+            } else if (value.type == 10)
+                addReference(refs_.rigidBodies, rigidBodies_, target, kind, ownerId, ownerGeneration,
+                             ReferenceField::morphOffset, static_cast<std::uint32_t>(subIndex));
+        }
+    } else if (kind == ReferenceObjectKind::displayFrame) {
+        const auto &value = model_.displayFrames[index];
+        for (std::size_t subIndex = 0; subIndex < value.items.size(); ++subIndex) {
+            const auto &item = value.items[subIndex];
+            if (item.bone)
+                addReference(refs_.bones, bones_, item.index, kind, ownerId, ownerGeneration,
+                             ReferenceField::displayItem, static_cast<std::uint32_t>(subIndex));
+            else
+                addReference(refs_.morphs, morphs_, item.index, kind, ownerId, ownerGeneration,
+                             ReferenceField::displayItem, static_cast<std::uint32_t>(subIndex));
+        }
+    } else if (kind == ReferenceObjectKind::rigidBody) {
+        addReference(refs_.bones, bones_, model_.rigidBodies[index].bone, kind, ownerId, ownerGeneration,
+                     ReferenceField::rigidBodyBone);
+    } else if (kind == ReferenceObjectKind::joint) {
+        const auto &value = model_.joints[index];
+        addReference(refs_.rigidBodies, rigidBodies_, value.bodyA, kind, ownerId, ownerGeneration,
+                     ReferenceField::jointBodyA);
+        addReference(refs_.rigidBodies, rigidBodies_, value.bodyB, kind, ownerId, ownerGeneration,
+                     ReferenceField::jointBodyB);
+    } else if (kind == ReferenceObjectKind::softBody) {
+        const auto &value = model_.softBodies[index];
+        addReference(refs_.materials, materials_, value.material, kind, ownerId, ownerGeneration,
+                     ReferenceField::softBodyMaterial);
+        for (std::size_t subIndex = 0; subIndex < value.anchors.size(); ++subIndex)
+            addReference(refs_.rigidBodies, rigidBodies_, value.anchors[subIndex].rigidBody, kind, ownerId,
+                         ownerGeneration, ReferenceField::softBodyAnchorRigidBody,
+                         static_cast<std::uint32_t>(subIndex));
+    }
+}
+
+ValidationResult PmxDocument::validateProperty(ReferenceObjectKind kind, std::size_t index) const {
+    ValidationResult result;
+    std::uint64_t ownerId{};
+    std::uint32_t ownerGeneration{};
+    const auto identify = [&](const auto &table) {
+        const auto handle = table.at(index);
+        ownerId = handle.id;
+        ownerGeneration = handle.generation;
+    };
+    switch (kind) {
+    case ReferenceObjectKind::vertex: identify(vertices_); break;
+    case ReferenceObjectKind::material: identify(materials_); break;
+    case ReferenceObjectKind::bone: identify(bones_); break;
+    case ReferenceObjectKind::morph: identify(morphs_); break;
+    case ReferenceObjectKind::displayFrame: identify(displayFrames_); break;
+    case ReferenceObjectKind::rigidBody: identify(rigidBodies_); break;
+    case ReferenceObjectKind::joint: identify(joints_); break;
+    case ReferenceObjectKind::softBody: identify(softBodies_); break;
+    default: return pmx::validate(model_);
+    }
+    const auto addError = [&](bool condition, std::string message, std::uint32_t subIndex = 0) {
+        if (condition)
+            return;
+        ValidationIssue issue{ValidationSeverity::error, ValidationCode::invalid_reference, {}, std::move(message)};
+        issue.location = {kind, ownerId, ownerGeneration, "property", subIndex};
+        result.issues.push_back(std::move(issue));
+    };
+    const auto inRange = [](std::int32_t value, std::size_t size, bool allowNone = true) {
+        return (allowNone && value == -1) || (value >= 0 && static_cast<std::size_t>(value) < size);
+    };
+    const auto finite = [](const auto &values) {
+        return std::all_of(values.begin(), values.end(), [](float value) { return std::isfinite(value); });
+    };
+
+    if (kind == ReferenceObjectKind::vertex) {
+        const auto &value = model_.vertices[index];
+        addError(finite(value.position) && finite(value.normal) && finite(value.uv) && finite(value.weights),
+                 "vertex contains non-finite values");
+        addError(model_.metadata.version >= 2.1F || value.weightType != PmxWeightType::qdef,
+                 "QDEF requires PMX 2.1");
+        const auto count = value.weightType == PmxWeightType::bdef1 ? 1U
+                           : value.weightType == PmxWeightType::bdef2 || value.weightType == PmxWeightType::sdef ? 2U : 4U;
+        for (std::size_t subIndex = 0; subIndex < count; ++subIndex)
+            addError(inRange(value.bones[subIndex], model_.bones.size()), "vertex bone index is out of range",
+                     static_cast<std::uint32_t>(subIndex));
+    } else if (kind == ReferenceObjectKind::material) {
+        const auto &value = model_.materials[index];
+        addError(inRange(value.textureIndex, model_.textures.size()), "material texture index is out of range");
+        addError(inRange(value.sphereTextureIndex, model_.textures.size()),
+                 "material sphere texture index is out of range");
+        addError(value.toonMode == 0 ? inRange(value.toonTextureIndex, model_.textures.size())
+                                     : value.toonMode == 1 && value.toonTextureIndex >= 0 &&
+                                           value.toonTextureIndex <= 9,
+                 "material toon index is out of range");
+    } else if (kind == ReferenceObjectKind::bone) {
+        const auto &value = model_.bones[index];
+        addError(inRange(value.parent, model_.bones.size()), "bone parent index is out of range");
+        if ((value.flags & 1U) != 0)
+            addError(inRange(value.tailBone, model_.bones.size()), "bone tail index is out of range");
+        if ((value.flags & 0x0300U) != 0)
+            addError(inRange(value.inheritParent, model_.bones.size()), "bone inherit index is out of range");
+        if ((value.flags & 0x0020U) != 0) {
+            addError(inRange(value.ikTarget, model_.bones.size()), "IK target index is out of range");
+            for (std::size_t subIndex = 0; subIndex < value.ikLinks.size(); ++subIndex)
+                addError(inRange(value.ikLinks[subIndex].bone, model_.bones.size()),
+                         "IK link index is out of range", static_cast<std::uint32_t>(subIndex));
+        }
+        std::vector<bool> visited(model_.bones.size());
+        auto parent = static_cast<std::int32_t>(index);
+        while (parent >= 0 && static_cast<std::size_t>(parent) < model_.bones.size()) {
+            if (visited[static_cast<std::size_t>(parent)]) {
+                addError(false, "bone hierarchy contains a cycle");
+                break;
+            }
+            visited[static_cast<std::size_t>(parent)] = true;
+            parent = model_.bones[static_cast<std::size_t>(parent)].parent;
+        }
+    } else if (kind == ReferenceObjectKind::morph) {
+        const auto &value = model_.morphs[index];
+        addError(value.type <= 10, "unknown morph type");
+        addError(model_.metadata.version >= 2.1F || (value.type != 9 && value.type != 10),
+                 "flip and impulse morphs require PMX 2.1");
+        for (std::size_t subIndex = 0; subIndex < value.offsets.size(); ++subIndex) {
+            const auto count = value.type == 1 || (value.type >= 3 && value.type <= 7) ? model_.vertices.size()
+                               : value.type == 2 ? model_.bones.size()
+                               : value.type == 8 ? model_.materials.size()
+                               : value.type == 10 ? model_.rigidBodies.size() : model_.morphs.size();
+            addError(inRange(value.offsets[subIndex].index, count,
+                             value.type != 1 && !(value.type >= 3 && value.type <= 7)),
+                     "morph reference index is out of range", static_cast<std::uint32_t>(subIndex));
+        }
+    } else if (kind == ReferenceObjectKind::displayFrame) {
+        const auto &value = model_.displayFrames[index];
+        for (std::size_t subIndex = 0; subIndex < value.items.size(); ++subIndex)
+            addError(inRange(value.items[subIndex].index,
+                             value.items[subIndex].bone ? model_.bones.size() : model_.morphs.size(), false),
+                     "display frame index is out of range", static_cast<std::uint32_t>(subIndex));
+    } else if (kind == ReferenceObjectKind::rigidBody) {
+        addError(inRange(model_.rigidBodies[index].bone, model_.bones.size()),
+                 "rigid body bone index is out of range");
+    } else if (kind == ReferenceObjectKind::joint) {
+        const auto &value = model_.joints[index];
+        addError(inRange(value.bodyA, model_.rigidBodies.size()), "joint A body index is out of range");
+        addError(inRange(value.bodyB, model_.rigidBodies.size()), "joint B body index is out of range");
+    } else if (kind == ReferenceObjectKind::softBody) {
+        const auto &value = model_.softBodies[index];
+        addError(model_.metadata.version >= 2.1F, "soft bodies require PMX 2.1");
+        addError(inRange(value.material, model_.materials.size()), "soft body material index is out of range");
+        for (std::size_t subIndex = 0; subIndex < value.anchors.size(); ++subIndex) {
+            addError(inRange(value.anchors[subIndex].rigidBody, model_.rigidBodies.size()),
+                     "soft body rigid body index is out of range", static_cast<std::uint32_t>(subIndex));
+            addError(inRange(value.anchors[subIndex].vertex, model_.vertices.size(), false),
+                     "soft body vertex index is out of range", static_cast<std::uint32_t>(subIndex));
+        }
+        for (std::size_t subIndex = 0; subIndex < value.pinnedVertices.size(); ++subIndex)
+            addError(inRange(value.pinnedVertices[subIndex], model_.vertices.size(), false),
+                     "soft body pinned vertex index is out of range", static_cast<std::uint32_t>(subIndex));
+    }
+    return result;
 }
 
 ValidationResult PmxDocument::validate() const {

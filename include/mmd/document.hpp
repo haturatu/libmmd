@@ -389,8 +389,12 @@ class PmxDocument {
     }
     void rebuildIndexes();
     void rebuildReferences();
+    void rebuildReferencesFor(ReferenceObjectKind kind, std::size_t index);
+    [[nodiscard]] ValidationResult validateProperty(ReferenceObjectKind kind, std::size_t index) const;
     static void remapBoneReferences(PmxModel &model, const std::vector<std::int32_t> &map);
-    [[nodiscard]] PmxTransactionResult finishPropertyEdit(PmxChangeSet changes);
+    [[nodiscard]] PmxTransactionResult finishPropertyEdit(PmxChangeSet changes,
+                                                          ReferenceObjectKind kind = ReferenceObjectKind::model,
+                                                          std::size_t index = 0);
     friend class Transaction;
 };
 
