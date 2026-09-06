@@ -95,6 +95,165 @@ bool containsBoneReference(const PmxModel &model, std::size_t target) {
 
 } // namespace
 
+struct PmxPatch::Data {
+    template <typename Value, typename Tag> struct Item {
+        std::uint64_t id{};
+        std::uint32_t generation{};
+        std::size_t index{};
+        std::optional<Value> value;
+    };
+    template <typename Value, typename Tag> struct Collection {
+        std::uint64_t nextId{};
+        std::vector<Item<Value, Tag>> items;
+        std::optional<std::vector<std::uint64_t>> order;
+    };
+    struct IndexEdit {
+        std::size_t offset{};
+        std::size_t eraseCount{};
+        std::vector<std::uint32_t> insert;
+    };
+    struct Side {
+        std::optional<PmxFormat> format;
+        std::optional<PmxMetadata> metadata;
+        std::optional<std::filesystem::path> sourcePath;
+        std::optional<IndexEdit> indices;
+        Collection<PmxVertex, VertexTag> vertices;
+        Collection<PmxTexture, TextureTag> textures;
+        Collection<PmxMaterial, MaterialTag> materials;
+        Collection<PmxBone, BoneTag> bones;
+        Collection<PmxMorph, MorphTag> morphs;
+        Collection<PmxDisplayFrame, DisplayFrameTag> displayFrames;
+        Collection<PmxRigidBody, RigidBodyTag> rigidBodies;
+        Collection<PmxJoint, JointTag> joints;
+        Collection<PmxSoftBody, SoftBodyTag> softBodies;
+        Collection<PmxFace, FaceTag> faces;
+    };
+    std::uint64_t domain{};
+    Side before;
+    Side after;
+};
+
+namespace {
+
+template <typename Value, typename Tag>
+void makeCollectionSides(const std::vector<Value> &beforeValues, const PmxDocument::Table<Tag> &beforeTable,
+                         const std::vector<Value> &afterValues, const PmxDocument::Table<Tag> &afterTable,
+                         PmxPatch::Data::Collection<Value, Tag> &before,
+                         PmxPatch::Data::Collection<Value, Tag> &after) {
+    before.nextId = beforeTable.nextId;
+    after.nextId = afterTable.nextId;
+    std::vector<std::uint64_t> beforeOrder;
+    std::vector<std::uint64_t> afterOrder;
+    beforeOrder.reserve(beforeTable.slots.size());
+    afterOrder.reserve(afterTable.slots.size());
+    for (const auto &slot : beforeTable.slots)
+        beforeOrder.push_back(slot.id);
+    for (const auto &slot : afterTable.slots)
+        afterOrder.push_back(slot.id);
+    if (beforeOrder != afterOrder) {
+        before.order = std::move(beforeOrder);
+        after.order = std::move(afterOrder);
+    }
+    std::vector<std::uint64_t> ids;
+    ids.reserve(beforeTable.slots.size() + afterTable.slots.size());
+    for (const auto &slot : beforeTable.slots)
+        ids.push_back(slot.id);
+    for (const auto &slot : afterTable.slots)
+        if (std::find(ids.begin(), ids.end(), slot.id) == ids.end())
+            ids.push_back(slot.id);
+    for (const auto id : ids) {
+        const auto beforeFound = beforeTable.indexById.find(id);
+        const auto afterFound = afterTable.indexById.find(id);
+        const bool inBefore = beforeFound != beforeTable.indexById.end();
+        const bool inAfter = afterFound != afterTable.indexById.end();
+        const auto beforeIndex = inBefore ? beforeFound->second : 0;
+        const auto afterIndex = inAfter ? afterFound->second : 0;
+        if (inBefore && inAfter &&
+            beforeTable.slots[beforeIndex].generation == afterTable.slots[afterIndex].generation &&
+            beforeValues[beforeIndex] == afterValues[afterIndex])
+            continue;
+        typename PmxPatch::Data::template Item<Value, Tag> beforeItem;
+        beforeItem.id = id;
+        beforeItem.index = beforeIndex;
+        if (inBefore) {
+            beforeItem.generation = beforeTable.slots[beforeIndex].generation;
+            beforeItem.value = beforeValues[beforeIndex];
+        }
+        typename PmxPatch::Data::template Item<Value, Tag> afterItem;
+        afterItem.id = id;
+        afterItem.index = afterIndex;
+        if (inAfter) {
+            afterItem.generation = afterTable.slots[afterIndex].generation;
+            afterItem.value = afterValues[afterIndex];
+        }
+        before.items.push_back(std::move(beforeItem));
+        after.items.push_back(std::move(afterItem));
+    }
+}
+
+std::pair<PmxPatch::Data::IndexEdit, PmxPatch::Data::IndexEdit>
+makeIndexEdits(const std::vector<std::uint32_t> &before, const std::vector<std::uint32_t> &after) {
+    std::size_t prefix{};
+    while (prefix < before.size() && prefix < after.size() && before[prefix] == after[prefix])
+        ++prefix;
+    std::size_t suffix{};
+    while (suffix < before.size() - prefix && suffix < after.size() - prefix &&
+           before[before.size() - 1U - suffix] == after[after.size() - 1U - suffix])
+        ++suffix;
+    PmxPatch::Data::IndexEdit beforeEdit{prefix, after.size() - prefix - suffix,
+                                         {before.begin() + static_cast<std::ptrdiff_t>(prefix),
+                                          before.end() - static_cast<std::ptrdiff_t>(suffix)}};
+    PmxPatch::Data::IndexEdit afterEdit{prefix, before.size() - prefix - suffix,
+                                        {after.begin() + static_cast<std::ptrdiff_t>(prefix),
+                                         after.end() - static_cast<std::ptrdiff_t>(suffix)}};
+    return {std::move(beforeEdit), std::move(afterEdit)};
+}
+
+template <typename Value, typename Tag>
+void applyCollection(const PmxPatch::Data::Collection<Value, Tag> &patch, std::vector<Value> &values,
+                     PmxDocument::Table<Tag> &table, std::uint64_t domain) {
+    for (const auto &item : patch.items) {
+        const auto found = std::find_if(table.slots.begin(), table.slots.end(),
+                                        [&](const auto &slot) { return slot.id == item.id; });
+        if (!item.value) {
+            if (found != table.slots.end()) {
+                const auto index = static_cast<std::size_t>(found - table.slots.begin());
+                table.slots.erase(found);
+                values.erase(values.begin() + static_cast<std::ptrdiff_t>(index));
+            }
+        } else if (found == table.slots.end()) {
+            values.push_back(*item.value);
+            table.slots.push_back({item.id, item.generation});
+        } else {
+            const auto index = static_cast<std::size_t>(found - table.slots.begin());
+            values[index] = *item.value;
+            table.slots[index].generation = item.generation;
+        }
+    }
+    if (patch.order) {
+        std::vector<Value> orderedValues;
+        std::vector<typename PmxDocument::Slot<Tag>> orderedSlots;
+        orderedValues.reserve(patch.order->size());
+        orderedSlots.reserve(patch.order->size());
+        for (const auto id : *patch.order) {
+            const auto found = std::find_if(table.slots.begin(), table.slots.end(),
+                                            [&](const auto &slot) { return slot.id == id; });
+            if (found == table.slots.end())
+                continue;
+            const auto index = static_cast<std::size_t>(found - table.slots.begin());
+            orderedValues.push_back(std::move(values[index]));
+            orderedSlots.push_back(*found);
+        }
+        values = std::move(orderedValues);
+        table.slots = std::move(orderedSlots);
+    }
+    table.domain = domain;
+    table.nextId = patch.nextId;
+    table.rebuildIndex();
+}
+
+} // namespace
+
 std::uint64_t PmxDocument::allocateDomain() noexcept {
     auto domain = nextDocumentDomain.fetch_add(1, std::memory_order_relaxed);
     while (domain == 0)
@@ -163,6 +322,88 @@ void PmxDocument::restoreSnapshot(const PmxDocument &snapshot, std::uint64_t tar
     }
     dirty_ = false;
     rebuildReferences();
+}
+
+PmxPatch PmxDocument::makePatch(const Transaction &transaction) const {
+    auto data = std::make_shared<PmxPatch::Data>();
+    data->domain = domain_;
+    if (model_.format != transaction.model_.format) {
+        data->before.format = model_.format;
+        data->after.format = transaction.model_.format;
+    }
+    if (model_.metadata != transaction.model_.metadata) {
+        data->before.metadata = model_.metadata;
+        data->after.metadata = transaction.model_.metadata;
+    }
+    if (model_.sourcePath != transaction.model_.sourcePath) {
+        data->before.sourcePath = model_.sourcePath;
+        data->after.sourcePath = transaction.model_.sourcePath;
+    }
+    if (model_.indices != transaction.model_.indices) {
+        auto edits = makeIndexEdits(model_.indices, transaction.model_.indices);
+        data->before.indices = std::move(edits.first);
+        data->after.indices = std::move(edits.second);
+    }
+    makeCollectionSides(model_.vertices, vertices_, transaction.model_.vertices, transaction.vertices_,
+                        data->before.vertices, data->after.vertices);
+    makeCollectionSides(model_.textures, textures_, transaction.model_.textures, transaction.textures_,
+                        data->before.textures, data->after.textures);
+    makeCollectionSides(model_.materials, materials_, transaction.model_.materials, transaction.materials_,
+                        data->before.materials, data->after.materials);
+    makeCollectionSides(model_.bones, bones_, transaction.model_.bones, transaction.bones_,
+                        data->before.bones, data->after.bones);
+    makeCollectionSides(model_.morphs, morphs_, transaction.model_.morphs, transaction.morphs_,
+                        data->before.morphs, data->after.morphs);
+    makeCollectionSides(model_.displayFrames, displayFrames_, transaction.model_.displayFrames,
+                        transaction.displayFrames_, data->before.displayFrames, data->after.displayFrames);
+    makeCollectionSides(model_.rigidBodies, rigidBodies_, transaction.model_.rigidBodies,
+                        transaction.rigidBodies_, data->before.rigidBodies, data->after.rigidBodies);
+    makeCollectionSides(model_.joints, joints_, transaction.model_.joints, transaction.joints_,
+                        data->before.joints, data->after.joints);
+    makeCollectionSides(model_.softBodies, softBodies_, transaction.model_.softBodies,
+                        transaction.softBodies_, data->before.softBodies, data->after.softBodies);
+    makeCollectionSides(faces_, facesTable_, transaction.faces_, transaction.facesTable_,
+                        data->before.faces, data->after.faces);
+    PmxPatch patch;
+    patch.data_ = std::move(data);
+    return patch;
+}
+
+bool PmxDocument::applyPatch(const PmxPatch &patch, bool forward) {
+    if (!patch.data_ || patch.data_->domain != domain_)
+        return false;
+    const auto &side = forward ? patch.data_->after : patch.data_->before;
+    if (side.format)
+        model_.format = *side.format;
+    if (side.metadata)
+        model_.metadata = *side.metadata;
+    if (side.sourcePath)
+        model_.sourcePath = *side.sourcePath;
+    if (side.indices) {
+        const auto &edit = *side.indices;
+        if (edit.offset > model_.indices.size() || edit.eraseCount > model_.indices.size() - edit.offset)
+            return false;
+        const auto begin = model_.indices.begin() + static_cast<std::ptrdiff_t>(edit.offset);
+        model_.indices.erase(begin, begin + static_cast<std::ptrdiff_t>(edit.eraseCount));
+        model_.indices.insert(model_.indices.begin() + static_cast<std::ptrdiff_t>(edit.offset),
+                              edit.insert.begin(), edit.insert.end());
+    }
+    applyCollection(side.vertices, model_.vertices, vertices_, domain_);
+    applyCollection(side.textures, model_.textures, textures_, domain_);
+    applyCollection(side.materials, model_.materials, materials_, domain_);
+    applyCollection(side.bones, model_.bones, bones_, domain_);
+    applyCollection(side.morphs, model_.morphs, morphs_, domain_);
+    applyCollection(side.displayFrames, model_.displayFrames, displayFrames_, domain_);
+    applyCollection(side.rigidBodies, model_.rigidBodies, rigidBodies_, domain_);
+    applyCollection(side.joints, model_.joints, joints_, domain_);
+    applyCollection(side.softBodies, model_.softBodies, softBodies_, domain_);
+    applyCollection(side.faces, faces_, facesTable_, domain_);
+    dirty_ = false;
+    const auto validation = pmx::validate(model_);
+    if (!validation.valid())
+        return false;
+    rebuildReferences();
+    return true;
 }
 
 PmxTransactionResult PmxDocument::finishPropertyEdit(PmxChangeSet changes, ReferenceObjectKind kind,
@@ -2273,6 +2514,17 @@ PmxTransactionResult PmxDocument::Transaction::commit() {
     auto validation = pmx::validate(model_);
     if (!errors_.empty() || !validation.valid())
         return {false, std::move(validation), std::move(errors_)};
+    vertices_.rebuildIndex();
+    textures_.rebuildIndex();
+    materials_.rebuildIndex();
+    bones_.rebuildIndex();
+    morphs_.rebuildIndex();
+    displayFrames_.rebuildIndex();
+    rigidBodies_.rebuildIndex();
+    joints_.rebuildIndex();
+    softBodies_.rebuildIndex();
+    facesTable_.rebuildIndex();
+    auto patch = document_.makePatch(*this);
     document_.model_ = std::move(model_);
     document_.vertices_ = std::move(vertices_);
     document_.textures_ = std::move(textures_);
@@ -2287,7 +2539,7 @@ PmxTransactionResult PmxDocument::Transaction::commit() {
     document_.facesTable_ = std::move(facesTable_);
     document_.dirty_ = false;
     document_.rebuildReferences();
-    return {true, std::move(validation), {}, std::move(changes_)};
+    return {true, std::move(validation), {}, std::move(changes_), std::move(patch)};
 }
 
 } // namespace mmd

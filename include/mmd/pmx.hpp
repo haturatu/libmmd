@@ -35,6 +35,7 @@ struct PmxMetadata {
     std::int32_t vertexCount{};
     std::uint8_t textEncoding{};
     std::uint8_t additionalUvCount{};
+    bool operator==(const PmxMetadata &) const = default;
 };
 
 enum class PmxTextEncoding : std::uint8_t { utf16le = 0, utf8 = 1 };
@@ -47,12 +48,14 @@ struct PmxFormat {
     std::uint8_t boneIndexSize{4};
     std::uint8_t morphIndexSize{4};
     std::uint8_t rigidBodyIndexSize{4};
+    bool operator==(const PmxFormat &) const = default;
 };
 
 struct PmxTexture {
     // Exact logical spelling stored in the PMX file. Never replace this with
     // a resolved absolute path: it is part of preservation-mode serialization.
     std::string storedPath;
+    bool operator==(const PmxTexture &) const = default;
 };
 
 enum class PmxWeightType : std::uint8_t { bdef1, bdef2, bdef4, sdef, qdef };
@@ -69,6 +72,7 @@ struct PmxVertex {
     Float3 sdefR0{};
     Float3 sdefR1{};
     float edgeScale{1.0F};
+    bool operator==(const PmxVertex &) const = default;
 };
 
 struct PmxMaterial {
@@ -88,6 +92,7 @@ struct PmxMaterial {
     std::int32_t toonTextureIndex{-1};
     std::string memo;
     std::uint32_t indexCount{};
+    bool operator==(const PmxMaterial &) const = default;
 };
 
 struct PmxIkLink {
@@ -95,6 +100,7 @@ struct PmxIkLink {
     bool limited{};
     Float3 minimum{};
     Float3 maximum{};
+    bool operator==(const PmxIkLink &) const = default;
 };
 
 struct PmxBone {
@@ -116,6 +122,7 @@ struct PmxBone {
     std::int32_t ikLoopCount{};
     float ikLimitAngle{};
     std::vector<PmxIkLink> ikLinks;
+    bool operator==(const PmxBone &) const = default;
 };
 
 // Morph type determines which fields are populated. Keeping one compact value type
@@ -132,6 +139,7 @@ struct PmxMorphOffset {
     // diffuse, specular+power, ambient+edge size, edge, texture, sphere, toon, reserved
     std::array<Float4, 8> materialVectors{};
     Float3 tertiaryVector3{};
+    bool operator==(const PmxMorphOffset &) const = default;
 };
 
 struct PmxMorph {
@@ -140,17 +148,20 @@ struct PmxMorph {
     std::uint8_t panel{};
     std::uint8_t type{};
     std::vector<PmxMorphOffset> offsets;
+    bool operator==(const PmxMorph &) const = default;
 };
 
 struct PmxDisplayItem {
     bool bone{};
     std::int32_t index{-1};
+    bool operator==(const PmxDisplayItem &) const = default;
 };
 struct PmxDisplayFrame {
     std::string name;
     std::string englishName;
     bool special{};
     std::vector<PmxDisplayItem> items;
+    bool operator==(const PmxDisplayFrame &) const = default;
 };
 
 struct PmxRigidBody {
@@ -172,6 +183,7 @@ struct PmxRigidBody {
     // Compatibility repairs preserve PMX body indices while keeping unsafe
     // physics data out of Bullet.
     bool physicsEnabled{true};
+    bool operator==(const PmxRigidBody &) const = default;
 };
 
 struct PmxJoint {
@@ -189,12 +201,14 @@ struct PmxJoint {
     Float3 translationSpring{};
     Float3 rotationSpring{};
     bool physicsEnabled{true};
+    bool operator==(const PmxJoint &) const = default;
 };
 
 struct PmxSoftBodyAnchor {
     std::int32_t rigidBody{-1};
     std::int32_t vertex{-1};
     bool nearMode{};
+    bool operator==(const PmxSoftBodyAnchor &) const = default;
 };
 struct PmxSoftBody {
     std::string name;
@@ -215,6 +229,7 @@ struct PmxSoftBody {
     std::array<float, 3> materialConfig{};
     std::vector<PmxSoftBodyAnchor> anchors;
     std::vector<std::int32_t> pinnedVertices;
+    bool operator==(const PmxSoftBody &) const = default;
 };
 
 struct PmxModel {

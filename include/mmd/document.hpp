@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -81,6 +82,7 @@ struct ReferenceSite {
 struct PmxFace {
     VertexHandle vertices[3]{};
     MaterialHandle material{};
+    bool operator==(const PmxFace &) const = default;
 };
 struct PmxVertexSkin {
     PmxWeightType type{PmxWeightType::bdef1};
@@ -134,11 +136,23 @@ struct SoftBodyDraft {
     PmxSoftBody value;
     std::optional<MaterialHandle> material;
 };
+class PmxPatch {
+  public:
+    struct Data;
+    [[nodiscard]] bool empty() const noexcept {
+        return !data_;
+    }
+
+  private:
+    std::shared_ptr<const Data> data_;
+    friend class PmxDocument;
+};
 struct PmxTransactionResult {
     bool committed{};
     ValidationResult validation;
     std::vector<std::string> errors;
     PmxChangeSet changes;
+    PmxPatch patch;
 };
 
 class PmxDocument {
@@ -227,6 +241,7 @@ class PmxDocument {
         return domain_;
     }
     void restoreSnapshot(const PmxDocument &snapshot, std::uint64_t targetDomain);
+    [[nodiscard]] bool applyPatch(const PmxPatch &patch, bool forward);
     [[nodiscard]] const PmxModel &model() const noexcept {
         return model_;
     }
@@ -395,6 +410,7 @@ class PmxDocument {
     [[nodiscard]] PmxTransactionResult finishPropertyEdit(PmxChangeSet changes,
                                                           ReferenceObjectKind kind = ReferenceObjectKind::model,
                                                           std::size_t index = 0);
+    [[nodiscard]] PmxPatch makePatch(const Transaction &transaction) const;
     friend class Transaction;
 };
 
@@ -645,6 +661,7 @@ class PmxDocument::Transaction {
     [[nodiscard]] PmxTransactionResult commit();
 
   private:
+    friend class PmxDocument;
     PmxDocument &document_;
     PmxModel model_;
     Table<VertexTag> vertices_;
