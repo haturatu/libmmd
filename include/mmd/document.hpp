@@ -245,6 +245,9 @@ class PmxDocument {
     [[nodiscard]] const PmxModel &model() const noexcept {
         return model_;
     }
+    void setSourcePath(std::filesystem::path path) {
+        model_.sourcePath = std::move(path);
+    }
     [[deprecated("Use transaction() for structural edits; unsafeModel invalidates handles")]] [[nodiscard]] PmxModel &
     unsafeModel() noexcept {
         dirty_ = true;
