@@ -4,7 +4,10 @@
 #include <mmd/vmd.hpp>
 
 #include <cstdint>
+#include <cstddef>
+#include <limits>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -53,6 +56,24 @@ struct MotionCompatibility {
     std::size_t matchedBoneTrackCount{};
 };
 
+// Replaces the sampled VMD weight for one model morph. Group/flip morphs are
+// still expanded by the regular evaluator, so bone, material, and vertex
+// morphs all follow the same animation and skinning path. A temporary override
+// uses `index == MorphOverride::temporary` and supplies transient vertex or
+// bone offsets without changing the model.
+struct MorphOverride {
+    // A temporary override has no model morph index. Its offsets are applied
+    // by the same evaluator before IK and skinning, which lets pose editing
+    // use the normal bone deformation path without mutating the document.
+    static constexpr std::size_t temporary = std::numeric_limits<std::size_t>::max();
+    std::size_t index{};
+    float weight{};
+    std::uint8_t type{};
+    std::span<const PmxMorphOffset> offsets{};
+};
+
+using MorphOverrides = std::span<const MorphOverride>;
+
 class MmdAnimator {
   public:
     explicit MmdAnimator(const PmxModel &model);
@@ -63,7 +84,9 @@ class MmdAnimator {
     void setPhysics(MmdPhysics *physics);
     void setIkEnabled(bool enabled) noexcept;
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
-    [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false);
+    [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F,
+                                               bool gpuSkinning = false,
+                                               MorphOverrides overrides = {});
 
   private:
     struct Impl;
