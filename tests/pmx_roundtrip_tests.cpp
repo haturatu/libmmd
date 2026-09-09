@@ -16,6 +16,36 @@ int main() {
     model.indices = {0, 1, 2};
     model.materials = {{.name = "material", .indexCount = 3}};
     model.bones = {{.name = "root", .tailOffset = {0.0F, 1.0F, 0.0F}}};
+    {
+        auto relationModel = model;
+        relationModel.bones.push_back({.name = "child"});
+        mmd::PmxDocument editable(relationModel);
+        const auto root = editable.boneHandle(0);
+        const auto child = editable.boneHandle(1);
+        const auto checkEdit = [&](auto edit) {
+            const auto before = editable.model();
+            auto transaction = editable.transaction();
+            assert(edit(transaction));
+            const auto result = transaction.commit();
+            assert(result.committed);
+            assert(result.changes.bones == std::vector<mmd::BoneHandle>{child});
+            const auto after = editable.model();
+            assert(editable.applyPatch(result.patch, false));
+            assert(mmd::pmx::semanticEqual(editable.model(), before));
+            assert(editable.applyPatch(result.patch, true));
+            assert(mmd::pmx::semanticEqual(editable.model(), after));
+        };
+        checkEdit([&](auto &tx) { return tx.setBoneParent(child, root); });
+        checkEdit([&](auto &tx) { return tx.setBoneParent(child, std::nullopt); });
+        checkEdit([&](auto &tx) { return tx.setBoneTailBone(child, root); });
+        checkEdit([&](auto &tx) { return tx.setBoneTailOffset(child, {0.0F, 1.0F, 0.0F}); });
+        checkEdit([&](auto &tx) { return tx.setBoneInherit(child, root, 0.5F, true, false); });
+        checkEdit([&](auto &tx) { return tx.setBoneInherit(child, std::nullopt, 0.0F, false, false); });
+        checkEdit([&](auto &tx) { return tx.setBoneIkTarget(child, root); });
+        checkEdit([&](auto &tx) { return tx.addBoneIkLink(child, mmd::BoneIkLinkDraft{.bone = root}); });
+        checkEdit([&](auto &tx) { return tx.eraseBoneIkLink(child, 0); });
+        checkEdit([&](auto &tx) { return tx.setBoneIkTarget(child, std::nullopt); });
+    }
     const auto path = std::filesystem::temp_directory_path() / "libmmd-pmx-roundtrip.pmx";
     mmd::pmx::save(path, model);
     const auto reloaded = mmd::pmx::load(path);
