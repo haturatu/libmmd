@@ -246,9 +246,13 @@ ValidationResult pmx::validate(const PmxModel &model) {
         if (boneVisit[index] == 2)
             return true;
         boneVisit[index] = 1;
-        const auto parent = model.bones[index].parent;
-        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() &&
-            !self(self, static_cast<std::size_t>(parent)))
+        const auto visitEdge = [&](std::int32_t target) {
+            if (target < 0 || static_cast<std::size_t>(target) >= model.bones.size())
+                return true;
+            return self(self, static_cast<std::size_t>(target));
+        };
+        if (!visitEdge(model.bones[index].parent) ||
+            ((model.bones[index].flags & 0x0300U) != 0 && !visitEdge(model.bones[index].inheritParent)))
             return false;
         boneVisit[index] = 2;
         return true;
@@ -256,7 +260,7 @@ ValidationResult pmx::validate(const PmxModel &model) {
     for (std::size_t index = 0; index < model.bones.size(); ++index) {
         if (!visitBone(visitBone, index)) {
             result.issues.push_back(
-                {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone hierarchy contains a cycle"});
+                {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone dependency graph contains a cycle"});
             break;
         }
     }

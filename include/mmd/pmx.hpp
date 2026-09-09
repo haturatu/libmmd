@@ -268,7 +268,7 @@ struct ValidationIssue {
     ValidationCode code{ValidationCode::generic};
     std::string object;
     std::string message;
-    ValidationLocation location;
+    ValidationLocation location{};
 };
 struct ValidationResult {
     std::vector<ValidationIssue> issues;

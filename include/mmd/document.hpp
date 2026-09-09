@@ -16,6 +16,7 @@
 namespace mmd {
 
 template <typename Tag> struct PmxHandle {
+    // Handles are only valid in the document that issued their domain.
     std::uint64_t domain{};
     std::uint64_t id{};
     std::uint32_t generation{};
@@ -119,9 +120,22 @@ struct VertexEraseImpact {
         return faces + morphOffsets + softBodyAnchors + pinnedVertices;
     }
 };
+struct BoneIkLinkDraft {
+    BoneHandle bone;
+    bool limited{};
+    Float3 minimum{};
+    Float3 maximum{};
+};
 struct BoneDraft {
     PmxBone value;
     std::optional<BoneHandle> parent;
+    std::optional<BoneHandle> tailBone;
+    std::optional<BoneHandle> inheritParent;
+    std::optional<BoneHandle> ikTarget;
+    std::vector<BoneIkLinkDraft> ikLinks;
+    // All bone-index fields in value are ignored and rebuilt from these
+    // handles. The reference-related bits in value.flags must agree with the
+    // optional handles and links.
 };
 struct RigidBodyDraft {
     PmxRigidBody value;
@@ -151,8 +165,8 @@ struct PmxTransactionResult {
     bool committed{};
     ValidationResult validation;
     std::vector<std::string> errors;
-    PmxChangeSet changes;
-    PmxPatch patch;
+    PmxChangeSet changes{};
+    PmxPatch patch{};
 };
 
 class PmxDocument {
@@ -437,17 +451,9 @@ class PmxDocument::Transaction {
     [[nodiscard]] BoneHandle addBone(PmxBone bone) {
         return insertBone(model_.bones.size(), std::move(bone));
     }
-    [[nodiscard]] BoneHandle addBone(BoneDraft draft) {
-        draft.value.parent = -1;
-        const auto handle = addBone(std::move(draft.value));
-        if (handle && draft.parent && !setBoneParent(handle, *draft.parent)) {
-            errors_.push_back("invalid bone draft parent");
-            return {};
-        }
-        return handle;
-    }
-    // References in bone are interpreted as pre-insertion PMX indices. Prefer
-    // addBone() followed by handle-based setters for new editor code.
+    [[nodiscard]] BoneHandle addBone(BoneDraft draft);
+    // Low-level DTO insertion. References in bone are interpreted as
+    // pre-insertion PMX indices; use BoneDraft for editor-facing code.
     [[nodiscard]] BoneHandle insertBone(std::size_t destination, PmxBone bone);
     [[nodiscard]] bool renameBone(BoneHandle h, std::string name) {
         const auto i = bones_.index(h);
@@ -461,35 +467,12 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setBoneParent(BoneHandle child, BoneHandle parent) {
         return setBoneParent(child, std::optional<BoneHandle>{parent});
     }
-    [[nodiscard]] bool setBoneParent(BoneHandle child, std::optional<BoneHandle> parent) {
-        const auto c = bones_.index(child);
-        const auto p = parent ? bones_.index(*parent) : std::optional<std::size_t>{};
-        if (!c || (parent && (!p || *c == *p)))
-            return false;
-        if (parent) {
-            std::vector<bool> visited(model_.bones.size());
-            for (auto cursor = *p;;) {
-                if (cursor >= model_.bones.size() || visited[cursor] || cursor == *c)
-                    return false;
-                visited[cursor] = true;
-                const auto next = model_.bones[cursor].parent;
-                if (next < 0)
-                    break;
-                cursor = static_cast<std::size_t>(next);
-            }
-        }
-        model_.bones[*c].parent = p ? static_cast<std::int32_t>(*p) : -1;
-        if (std::find(changes_.bones.begin(), changes_.bones.end(), child) == changes_.bones.end())
-            changes_.bones.push_back(child);
-        return true;
-    }
     [[nodiscard]] bool setMetadata(PmxMetadata metadata);
     [[nodiscard]] bool setBone(BoneHandle h, const PmxBone &bone);
     [[nodiscard]] bool setBoneName(BoneHandle h, std::string value);
     [[nodiscard]] bool setBoneEnglishName(BoneHandle h, std::string value);
     [[nodiscard]] bool setBonePosition(BoneHandle h, Float3 value);
     [[nodiscard]] bool setBoneTailBone(BoneHandle h, std::optional<BoneHandle> value);
-    [[nodiscard]] bool setBoneTailOffset(BoneHandle h, Float3 value);
     [[nodiscard]] bool setBoneDeformLayer(BoneHandle h, std::int32_t value);
     [[nodiscard]] bool setBoneFlags(BoneHandle h, std::uint16_t value);
     [[nodiscard]] bool setBoneInheritParent(BoneHandle h, std::optional<BoneHandle> value);
@@ -497,11 +480,18 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setBoneFixedAxis(BoneHandle h, Float3 value);
     [[nodiscard]] bool setBoneLocalAxes(BoneHandle h, Float3 x, Float3 z);
     [[nodiscard]] bool setBoneExternalParentKey(BoneHandle h, std::int32_t value);
-    [[nodiscard]] bool setBoneIkTarget(BoneHandle h, std::optional<BoneHandle> value);
     [[nodiscard]] bool setBoneIkLimits(BoneHandle h, std::int32_t loops, float angle);
     [[nodiscard]] bool setBoneIkLink(BoneHandle h, std::size_t index, PmxIkLink value);
     [[nodiscard]] bool addBoneIkLink(BoneHandle h, PmxIkLink value);
-    [[nodiscard]] bool eraseBoneIkLink(BoneHandle h, std::size_t index);
+    [[nodiscard]] bool setBoneParent(BoneHandle child, std::optional<BoneHandle> parent);
+    [[nodiscard]] bool setBoneTailBone(BoneHandle bone, BoneHandle target);
+    [[nodiscard]] bool setBoneTailOffset(BoneHandle bone, Float3 offset);
+    [[nodiscard]] bool setBoneInherit(BoneHandle bone, std::optional<BoneHandle> parent, float ratio, bool rotation,
+                                      bool translation);
+    // Passing nullopt disables IK and discards any serialized IK links.
+    [[nodiscard]] bool setBoneIkTarget(BoneHandle bone, std::optional<BoneHandle> target);
+    [[nodiscard]] bool addBoneIkLink(BoneHandle bone, BoneIkLinkDraft link);
+    [[nodiscard]] bool eraseBoneIkLink(BoneHandle bone, std::size_t index);
     [[nodiscard]] EraseImpact analyzeErase(BoneHandle h) const;
     [[nodiscard]] bool eraseBone(BoneHandle h, ErasePolicy policy = ErasePolicy::rejectIfReferenced);
     [[nodiscard]] bool moveBone(BoneHandle h, std::size_t destination);

@@ -93,6 +93,37 @@ bool containsBoneReference(const PmxModel &model, std::size_t target) {
                        [&](const auto &body) { return match(body.bone); });
 }
 
+constexpr std::uint16_t boneTailBoneFlag = 0x0001U;
+constexpr std::uint16_t boneIkFlag = 0x0020U;
+constexpr std::uint16_t boneInheritFlags = 0x0300U;
+constexpr std::uint16_t boneInheritRotationFlag = 0x0100U;
+constexpr std::uint16_t boneInheritTranslationFlag = 0x0200U;
+
+bool hasBoneDependencyCycle(const std::vector<PmxBone> &bones) {
+    std::vector<std::uint8_t> state(bones.size());
+    const auto visit = [&](auto &&self, std::size_t index) -> bool {
+        if (state[index] == 1)
+            return true;
+        if (state[index] == 2)
+            return false;
+        state[index] = 1;
+        const auto visitEdge = [&](std::int32_t target) {
+            if (target < 0 || static_cast<std::size_t>(target) >= bones.size())
+                return false;
+            return self(self, static_cast<std::size_t>(target));
+        };
+        if (visitEdge(bones[index].parent) ||
+            ((bones[index].flags & boneInheritFlags) != 0 && visitEdge(bones[index].inheritParent)))
+            return true;
+        state[index] = 2;
+        return false;
+    };
+    for (std::size_t i = 0; i < bones.size(); ++i)
+        if (visit(visit, i))
+            return true;
+    return false;
+}
+
 } // namespace
 
 struct PmxPatch::Data {
@@ -1263,6 +1294,187 @@ bool PmxDocument::Transaction::materialReferenced(std::size_t i) const {
     return std::any_of(model_.softBodies.begin(), model_.softBodies.end(),
                        [&](const auto &b) { return b.material == static_cast<std::int32_t>(i); });
 }
+BoneHandle PmxDocument::Transaction::addBone(BoneDraft draft) {
+    if (done_)
+        return {};
+
+    const auto flags = draft.value.flags;
+    const auto tailBoneEnabled = (flags & boneTailBoneFlag) != 0;
+    const auto inheritEnabled = (flags & boneInheritFlags) != 0;
+    const auto ikEnabled = (flags & boneIkFlag) != 0;
+    if (tailBoneEnabled != draft.tailBone.has_value()) {
+        errors_.push_back("bone draft tail reference does not match flags");
+        return {};
+    }
+    if (inheritEnabled != draft.inheritParent.has_value()) {
+        errors_.push_back("bone draft inherit reference does not match flags");
+        return {};
+    }
+    if (ikEnabled != draft.ikTarget.has_value() || (!ikEnabled && !draft.ikLinks.empty())) {
+        errors_.push_back("bone draft IK references do not match flags");
+        return {};
+    }
+
+    const auto valid = [&](const auto &handle) { return !handle || bones_.index(*handle).has_value(); };
+    if (!valid(draft.parent) || !valid(draft.tailBone) || !valid(draft.inheritParent) || !valid(draft.ikTarget)) {
+        errors_.push_back("bone draft contains an invalid handle");
+        return {};
+    }
+    for (const auto &link : draft.ikLinks) {
+        if (!bones_.index(link.bone)) {
+            errors_.push_back("bone draft contains an invalid IK link");
+            return {};
+        }
+    }
+
+    const auto inheritRatio = draft.value.inheritRatio;
+    const auto inheritRotation = (flags & boneInheritRotationFlag) != 0;
+    const auto inheritTranslation = (flags & boneInheritTranslationFlag) != 0;
+    auto bone = std::move(draft.value);
+    // Serialized indices are never accepted from the editor-facing draft.
+    bone.parent = -1;
+    bone.tailBone = -1;
+    bone.inheritParent = -1;
+    bone.ikTarget = -1;
+    bone.ikLinks.clear();
+
+    const auto handle = addBone(std::move(bone));
+    if (!handle)
+        return {};
+    const auto fail = [&](const char *message) {
+        errors_.push_back(message);
+        return BoneHandle{};
+    };
+    if (draft.parent && !setBoneParent(handle, *draft.parent))
+        return fail("invalid bone draft parent");
+    if (draft.tailBone && !setBoneTailBone(handle, *draft.tailBone))
+        return fail("invalid bone draft tail reference");
+    if (draft.inheritParent &&
+        !setBoneInherit(handle, *draft.inheritParent, inheritRatio, inheritRotation, inheritTranslation))
+        return fail("invalid bone draft inherit reference");
+    if (draft.ikTarget && !setBoneIkTarget(handle, *draft.ikTarget))
+        return fail("invalid bone draft IK target");
+    for (const auto &link : draft.ikLinks)
+        if (!addBoneIkLink(handle, link))
+            return fail("invalid bone draft IK link");
+    return handle;
+}
+bool PmxDocument::Transaction::setBoneParent(BoneHandle child, std::optional<BoneHandle> parent) {
+    const auto c = bones_.index(child);
+    if (!c)
+        return false;
+    if (!parent) {
+        model_.bones[*c].parent = -1;
+        recordHandle(changes_.bones, child);
+        return true;
+    }
+    const auto p = bones_.index(*parent);
+    if (!p || *c == *p)
+        return false;
+    auto &current = model_.bones[*c];
+    const auto previous = current.parent;
+    current.parent = static_cast<std::int32_t>(*p);
+    if (hasBoneDependencyCycle(model_.bones)) {
+        current.parent = previous;
+        return false;
+    }
+    recordHandle(changes_.bones, child);
+    return true;
+}
+bool PmxDocument::Transaction::setBoneTailBone(BoneHandle bone, BoneHandle target) {
+    const auto b = bones_.index(bone), t = bones_.index(target);
+    if (!b || !t || *b == *t)
+        return false;
+    model_.bones[*b].flags |= boneTailBoneFlag;
+    model_.bones[*b].tailBone = static_cast<std::int32_t>(*t);
+    recordHandle(changes_.bones, bone);
+    return true;
+}
+bool PmxDocument::Transaction::setBoneTailOffset(BoneHandle bone, Float3 offset) {
+    const auto b = bones_.index(bone);
+    if (!b)
+        return false;
+    model_.bones[*b].flags &= static_cast<std::uint16_t>(~boneTailBoneFlag);
+    model_.bones[*b].tailBone = -1;
+    model_.bones[*b].tailOffset = offset;
+    recordHandle(changes_.bones, bone);
+    return true;
+}
+bool PmxDocument::Transaction::setBoneInherit(BoneHandle bone, std::optional<BoneHandle> parent, float ratio,
+                                              bool rotation, bool translation) {
+    const auto b = bones_.index(bone);
+    if (!b)
+        return false;
+    if (!parent) {
+        if (rotation || translation)
+            return false;
+        model_.bones[*b].flags &= static_cast<std::uint16_t>(~boneInheritFlags);
+        model_.bones[*b].inheritParent = -1;
+        model_.bones[*b].inheritRatio = 0.0F;
+        recordHandle(changes_.bones, bone);
+        return true;
+    }
+    const auto p = bones_.index(*parent);
+    if (!p || *b == *p || (!rotation && !translation))
+        return false;
+    auto &current = model_.bones[*b];
+    const auto previousFlags = current.flags;
+    const auto previousParent = current.inheritParent;
+    const auto previousRatio = current.inheritRatio;
+    current.flags &= static_cast<std::uint16_t>(~boneInheritFlags);
+    if (rotation)
+        current.flags |= boneInheritRotationFlag;
+    if (translation)
+        current.flags |= boneInheritTranslationFlag;
+    current.inheritParent = static_cast<std::int32_t>(*p);
+    current.inheritRatio = ratio;
+    if (hasBoneDependencyCycle(model_.bones)) {
+        current.flags = previousFlags;
+        current.inheritParent = previousParent;
+        current.inheritRatio = previousRatio;
+        return false;
+    }
+    recordHandle(changes_.bones, bone);
+    return true;
+}
+bool PmxDocument::Transaction::setBoneIkTarget(BoneHandle bone, std::optional<BoneHandle> target) {
+    const auto b = bones_.index(bone);
+    if (!b)
+        return false;
+    auto &current = model_.bones[*b];
+    if (!target) {
+        current.flags &= static_cast<std::uint16_t>(~boneIkFlag);
+        current.ikTarget = -1;
+        current.ikLinks.clear();
+        recordHandle(changes_.bones, bone);
+        return true;
+    }
+    const auto t = bones_.index(*target);
+    if (!t || *b == *t)
+        return false;
+    if ((current.flags & boneIkFlag) == 0)
+        current.ikLinks.clear();
+    current.flags |= boneIkFlag;
+    current.ikTarget = static_cast<std::int32_t>(*t);
+    recordHandle(changes_.bones, bone);
+    return true;
+}
+bool PmxDocument::Transaction::addBoneIkLink(BoneHandle bone, BoneIkLinkDraft link) {
+    const auto b = bones_.index(bone), target = bones_.index(link.bone);
+    if (!b || !target || (model_.bones[*b].flags & boneIkFlag) == 0 || model_.bones[*b].ikTarget < 0)
+        return false;
+    model_.bones[*b].ikLinks.push_back({static_cast<std::int32_t>(*target), link.limited, link.minimum, link.maximum});
+    recordHandle(changes_.bones, bone);
+    return true;
+}
+bool PmxDocument::Transaction::eraseBoneIkLink(BoneHandle bone, std::size_t index) {
+    const auto b = bones_.index(bone);
+    if (!b || index >= model_.bones[*b].ikLinks.size())
+        return false;
+    model_.bones[*b].ikLinks.erase(model_.bones[*b].ikLinks.begin() + static_cast<std::ptrdiff_t>(index));
+    recordHandle(changes_.bones, bone);
+    return true;
+}
 BoneHandle PmxDocument::Transaction::insertBone(std::size_t destination, PmxBone bone) {
     if (done_ || destination > model_.bones.size())
         return {};
@@ -1317,10 +1529,6 @@ bool PmxDocument::Transaction::setBoneTailBone(BoneHandle handle, std::optional<
     return updateValue(bones_, model_.bones, handle, [&](auto &bone) { bone.tailBone = index; }) &&
            (recordHandle(changes_.bones, handle), true);
 }
-bool PmxDocument::Transaction::setBoneTailOffset(BoneHandle handle, Float3 value) {
-    return updateValue(bones_, model_.bones, handle, [&](auto &bone) { bone.tailOffset = value; }) &&
-           (recordHandle(changes_.bones, handle), true);
-}
 bool PmxDocument::Transaction::setBoneDeformLayer(BoneHandle handle, std::int32_t value) {
     return updateValue(bones_, model_.bones, handle, [&](auto &bone) { bone.deformLayer = value; }) &&
            (recordHandle(changes_.bones, handle), true);
@@ -1355,13 +1563,6 @@ bool PmxDocument::Transaction::setBoneExternalParentKey(BoneHandle handle, std::
     return updateValue(bones_, model_.bones, handle, [&](auto &bone) { bone.externalParentKey = value; }) &&
            (recordHandle(changes_.bones, handle), true);
 }
-bool PmxDocument::Transaction::setBoneIkTarget(BoneHandle handle, std::optional<BoneHandle> value) {
-    const auto index = boneIndex(bones_, value);
-    if (index == -2)
-        return false;
-    return updateValue(bones_, model_.bones, handle, [&](auto &bone) { bone.ikTarget = index; }) &&
-           (recordHandle(changes_.bones, handle), true);
-}
 bool PmxDocument::Transaction::setBoneIkLimits(BoneHandle handle, std::int32_t loops, float angle) {
     return updateValue(bones_, model_.bones, handle, [&](auto &bone) {
                bone.ikLoopCount = loops;
@@ -1380,14 +1581,6 @@ bool PmxDocument::Transaction::setBoneIkLink(BoneHandle handle, std::size_t inde
 bool PmxDocument::Transaction::addBoneIkLink(BoneHandle handle, PmxIkLink value) {
     return updateValue(bones_, model_.bones, handle, [&](auto &bone) { bone.ikLinks.push_back(value); }) &&
            (recordHandle(changes_.bones, handle), true);
-}
-bool PmxDocument::Transaction::eraseBoneIkLink(BoneHandle handle, std::size_t index) {
-    const auto bone = bones_.index(handle);
-    if (!bone || index >= model_.bones[*bone].ikLinks.size())
-        return false;
-    model_.bones[*bone].ikLinks.erase(model_.bones[*bone].ikLinks.begin() + static_cast<std::ptrdiff_t>(index));
-    recordHandle(changes_.bones, handle);
-    return true;
 }
 bool PmxDocument::Transaction::eraseBone(BoneHandle h, ErasePolicy policy) {
     const auto target = bones_.index(h);
