@@ -20,6 +20,7 @@ int main() {
     model.morphs[0].offsets = {{.index = 0, .scalar = 1.0F}};
     const auto bounded = mmd::expandMorphWeights(model, rootWeights, {.maxSteps = 8});
     assert(bounded.budgetExceeded);
+    assert(bounded.cycleDetected);
 
     const std::array<float, 3> invalidWeights{std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F};
     const auto nonFinite = mmd::expandMorphWeights(model, invalidWeights);

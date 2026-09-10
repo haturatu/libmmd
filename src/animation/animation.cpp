@@ -701,6 +701,36 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
                                         MorphExpansionLimits limits) {
     MorphExpansionResult result;
     result.effectiveWeights.resize(model.morphs.size());
+    std::vector<std::size_t> indegree(model.morphs.size());
+    std::vector<std::vector<std::size_t>> dependents(model.morphs.size());
+    std::size_t groupCount{};
+    for (std::size_t parent = 0; parent < model.morphs.size(); ++parent) {
+        const auto &morph = model.morphs[parent];
+        if (morph.type != 0 && morph.type != 9)
+            continue;
+        ++groupCount;
+        for (const auto &offset : morph.offsets)
+            if (offset.index >= 0 && static_cast<std::size_t>(offset.index) < model.morphs.size() &&
+                (model.morphs[static_cast<std::size_t>(offset.index)].type == 0 ||
+                 model.morphs[static_cast<std::size_t>(offset.index)].type == 9)) {
+                dependents[parent].push_back(static_cast<std::size_t>(offset.index));
+                ++indegree[static_cast<std::size_t>(offset.index)];
+            }
+    }
+    std::vector<std::size_t> groupQueue;
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        if ((model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] == 0)
+            groupQueue.push_back(index);
+    std::size_t visitedGroups{};
+    while (!groupQueue.empty()) {
+        const auto index = groupQueue.back();
+        groupQueue.pop_back();
+        ++visitedGroups;
+        for (const auto child : dependents[index])
+            if (--indegree[child] == 0)
+                groupQueue.push_back(child);
+    }
+    result.cycleDetected = visitedGroups != groupCount;
     struct WorkItem {
         std::size_t index;
         float weight;
@@ -727,7 +757,6 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
         for (const auto &offset : morph.offsets) {
             if (offset.index < 0 || static_cast<std::size_t>(offset.index) >= model.morphs.size() ||
                 !std::isfinite(offset.scalar)) {
-                result.cycleDetected = result.cycleDetected || offset.index == static_cast<std::int32_t>(item.index);
                 continue;
             }
             pending.push_back({static_cast<std::size_t>(offset.index), item.weight * offset.scalar});
