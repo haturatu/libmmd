@@ -525,7 +525,9 @@ bool ikEnabledAt(const VmdMotion *motion, std::string_view name, float frame) {
 
 void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
              const VmdMotion *motion, float frame, std::vector<LocalPose> &localScratch,
-             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState) {
+             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState, bool enabled) {
+    if (!enabled)
+        return;
     for (const auto ikIndex : order) {
         const auto &ik = model.bones[ikIndex];
         if ((ik.flags & 0x0020U) == 0 || ik.ikTarget < 0 || static_cast<std::size_t>(ik.ikTarget) >= poses.size() ||
@@ -763,6 +765,10 @@ void MmdAnimator::setPhysics(MmdPhysics *physics) {
     previousFrame_ = -1.0F;
 }
 
+void MmdAnimator::setIkEnabled(bool enabled) noexcept {
+    ikEnabled_ = enabled;
+}
+
 MotionCompatibility MmdAnimator::motionCompatibility() const {
     MotionCompatibility result;
     result.pmxBoneCount = model_.bones.size();
@@ -790,7 +796,7 @@ MotionCompatibility MmdAnimator::motionCompatibility() const {
     return result;
 }
 
-AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning) {
+AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides) {
 #if !LIBMMD_ENABLE_PHYSICS
     static_cast<void>(deltaSeconds);
 #endif
@@ -845,6 +851,10 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         if (const auto found = impl_->morphTracks.find(model_.morphs[i].name); found != impl_->morphTracks.end()) {
             morphWeights[i] = sampleMorph(found->second, frame);
         }
+    }
+    for (const auto &override : overrides) {
+        if (override.index < morphWeights.size())
+            morphWeights[override.index] = std::clamp(override.weight, 0.0F, 1.0F);
     }
     std::vector<std::uint8_t> morphStack(model_.morphs.size());
     std::function<void(std::size_t, float)> applyMorph = [&](std::size_t index, float weight) {
@@ -934,6 +944,24 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 
     auto &poses = impl_->poses;
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
+    for (const auto &override : overrides) {
+        if (override.index != MorphOverride::temporary || (override.type != 1U && override.type != 2U))
+            continue;
+        for (const auto &offset : override.offsets) {
+            if (offset.index < 0)
+                continue;
+            if (override.type == 1U) {
+                if (static_cast<std::size_t>(offset.index) < result.vertices.size())
+                    result.vertices[static_cast<std::size_t>(offset.index)].position =
+                        add(result.vertices[static_cast<std::size_t>(offset.index)].position,
+                            mul(offset.vector3, override.weight));
+            } else if (static_cast<std::size_t>(offset.index) < local.size()) {
+                const auto bone = static_cast<std::size_t>(offset.index);
+                local[bone].translation = add(local[bone].translation, mul(offset.vector3, override.weight));
+                local[bone].rotation = multiply(local[bone].rotation, slerp(identity, offset.vector4, override.weight));
+            }
+        }
+    }
     for (std::size_t i = 0; i < local.size(); ++i) {
         poses[i].base = local[i];
         poses[i].append = {};
@@ -946,7 +974,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.beforePhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState);
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState);
+            impl_->globalState, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
     for (std::size_t i = 0; i < global.size(); ++i)
@@ -1067,7 +1095,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.afterPhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState);
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState);
+            impl_->globalState, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;
         global[i] = poses[i].global;

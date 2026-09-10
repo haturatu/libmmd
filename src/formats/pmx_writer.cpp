@@ -135,6 +135,16 @@ void addError(ValidationResult &result, bool condition, std::string message) {
         result.issues.push_back({ValidationSeverity::error, ValidationCode::generic, {}, std::move(message)});
 }
 
+void addIndexedError(ValidationResult &result, bool condition, std::string message, ReferenceObjectKind kind,
+                     std::size_t index) {
+    if (!condition) {
+        ValidationIssue issue{ValidationSeverity::error, ValidationCode::generic, {}, std::move(message)};
+        issue.location.kind = kind;
+        issue.location.subIndex = static_cast<std::uint32_t>(index);
+        result.issues.push_back(std::move(issue));
+    }
+}
+
 } // namespace
 
 std::uint8_t pmx::requiredVertexIndexWidth(std::size_t count) noexcept {
@@ -181,43 +191,53 @@ ValidationResult pmx::validate(const PmxModel &model) {
     for (const auto index : model.indices)
         addError(result, index < model.vertices.size(), "vertex index is out of range");
     std::uint64_t materialIndices{};
-    for (const auto &material : model.materials) {
+    for (std::size_t materialIndex = 0; materialIndex < model.materials.size(); ++materialIndex) {
+        const auto &material = model.materials[materialIndex];
         materialIndices += material.indexCount;
-        addError(result, inRange(material.textureIndex, model.textures.size()),
-                 "material texture index is out of range");
-        addError(result, inRange(material.sphereTextureIndex, model.textures.size()),
-                 "material sphere texture index is out of range");
+        addIndexedError(result, inRange(material.textureIndex, model.textures.size()),
+                        "material texture index is out of range", ReferenceObjectKind::material, materialIndex);
+        addIndexedError(result, inRange(material.sphereTextureIndex, model.textures.size()),
+                        "material sphere texture index is out of range", ReferenceObjectKind::material, materialIndex);
         if (material.toonMode == 0)
-            addError(result, inRange(material.toonTextureIndex, model.textures.size()),
-                     "material toon texture index is out of range");
+            addIndexedError(result, inRange(material.toonTextureIndex, model.textures.size()),
+                            "material toon texture index is out of range", ReferenceObjectKind::material,
+                            materialIndex);
         else
             addError(result, material.toonMode == 1 && material.toonTextureIndex >= 0 && material.toonTextureIndex <= 9,
                      "shared toon index is invalid");
     }
     addError(result, materialIndices == model.indices.size(), "material ranges do not cover indices");
-    for (const auto &vertex : model.vertices) {
-        addError(result,
-                 finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) && finite(vertex.weights),
-                 "vertex contains non-finite values");
-        addError(result, model.metadata.version >= 2.1F || vertex.weightType != PmxWeightType::qdef,
-                 "QDEF requires PMX 2.1");
+    for (std::size_t vertexIndex = 0; vertexIndex < model.vertices.size(); ++vertexIndex) {
+        const auto &vertex = model.vertices[vertexIndex];
+        addIndexedError(result,
+                        finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) && finite(vertex.weights),
+                        "vertex contains non-finite values", ReferenceObjectKind::vertex, vertexIndex);
+        addIndexedError(result, model.metadata.version >= 2.1F || vertex.weightType != PmxWeightType::qdef,
+                        "QDEF requires PMX 2.1", ReferenceObjectKind::vertex, vertexIndex);
         const auto boneCount = vertex.weightType == PmxWeightType::bdef1 ? 1U
                                : vertex.weightType == PmxWeightType::bdef2 || vertex.weightType == PmxWeightType::sdef
                                    ? 2U
                                    : 4U;
         for (std::size_t i = 0; i < boneCount; ++i)
-            addError(result, inRange(vertex.bones[i], model.bones.size()), "vertex bone index is out of range");
+            addIndexedError(result, inRange(vertex.bones[i], model.bones.size()), "vertex bone index is out of range",
+                            ReferenceObjectKind::vertex, vertexIndex);
     }
-    for (const auto &bone : model.bones) {
-        addError(result, inRange(bone.parent, model.bones.size()), "bone parent index is out of range");
+    for (std::size_t boneIndex = 0; boneIndex < model.bones.size(); ++boneIndex) {
+        const auto &bone = model.bones[boneIndex];
+        addIndexedError(result, inRange(bone.parent, model.bones.size()), "bone parent index is out of range",
+                        ReferenceObjectKind::bone, boneIndex);
         if ((bone.flags & 0x0001U) != 0)
-            addError(result, inRange(bone.tailBone, model.bones.size()), "bone tail index is out of range");
+            addIndexedError(result, inRange(bone.tailBone, model.bones.size()), "bone tail index is out of range",
+                            ReferenceObjectKind::bone, boneIndex);
         if ((bone.flags & 0x0300U) != 0)
-            addError(result, inRange(bone.inheritParent, model.bones.size()), "bone inherit index is out of range");
+            addIndexedError(result, inRange(bone.inheritParent, model.bones.size()),
+                            "bone inherit index is out of range", ReferenceObjectKind::bone, boneIndex);
         if ((bone.flags & 0x0020U) != 0) {
-            addError(result, inRange(bone.ikTarget, model.bones.size()), "IK target index is out of range");
+            addIndexedError(result, inRange(bone.ikTarget, model.bones.size()), "IK target index is out of range",
+                            ReferenceObjectKind::bone, boneIndex);
             for (const auto &link : bone.ikLinks)
-                addError(result, inRange(link.bone, model.bones.size()), "IK link index is out of range");
+                addIndexedError(result, inRange(link.bone, model.bones.size()), "IK link index is out of range",
+                                ReferenceObjectKind::bone, boneIndex);
         }
     }
     std::vector<std::uint8_t> boneVisit(model.bones.size());
@@ -245,29 +265,35 @@ ValidationResult pmx::validate(const PmxModel &model) {
             break;
         }
     }
-    for (const auto &morph : model.morphs) {
+    for (std::size_t morphIndex = 0; morphIndex < model.morphs.size(); ++morphIndex) {
+        const auto &morph = model.morphs[morphIndex];
         addError(result, morph.type <= 10, "unknown morph type");
-        addError(result, model.metadata.version >= 2.1F || (morph.type != 9 && morph.type != 10),
-                 "flip and impulse morphs require PMX 2.1");
+        addIndexedError(result, model.metadata.version >= 2.1F || (morph.type != 9 && morph.type != 10),
+                        "flip and impulse morphs require PMX 2.1", ReferenceObjectKind::morph, morphIndex);
         for (const auto &offset : morph.offsets) {
             const auto count = morph.type == 1 || (morph.type >= 3 && morph.type <= 7) ? model.vertices.size()
                                : morph.type == 2                                       ? model.bones.size()
                                : morph.type == 8                                       ? model.materials.size()
                                : morph.type == 10                                      ? model.rigidBodies.size()
                                                                                        : model.morphs.size();
-            addError(result, inRange(offset.index, count, morph.type != 1 && !(morph.type >= 3 && morph.type <= 7)),
-                     "morph reference index is out of range");
+            addIndexedError(result,
+                            inRange(offset.index, count, morph.type != 1 && !(morph.type >= 3 && morph.type <= 7)),
+                            "morph reference index is out of range", ReferenceObjectKind::morph, morphIndex);
         }
     }
-    for (const auto &frame : model.displayFrames)
-        for (const auto &item : frame.items)
-            addError(result, inRange(item.index, item.bone ? model.bones.size() : model.morphs.size(), false),
-                     "display frame index is out of range");
-    for (const auto &body : model.rigidBodies)
-        addError(result, inRange(body.bone, model.bones.size()), "rigid body bone index is out of range");
-    for (const auto &joint : model.joints) {
-        addError(result, inRange(joint.bodyA, model.rigidBodies.size()), "joint A body index is out of range");
-        addError(result, inRange(joint.bodyB, model.rigidBodies.size()), "joint B body index is out of range");
+    for (std::size_t frameIndex = 0; frameIndex < model.displayFrames.size(); ++frameIndex)
+        for (const auto &item : model.displayFrames[frameIndex].items)
+            addIndexedError(result, inRange(item.index, item.bone ? model.bones.size() : model.morphs.size(), false),
+                            "display frame index is out of range", ReferenceObjectKind::displayFrame, frameIndex);
+    for (std::size_t bodyIndex = 0; bodyIndex < model.rigidBodies.size(); ++bodyIndex)
+        addIndexedError(result, inRange(model.rigidBodies[bodyIndex].bone, model.bones.size()),
+                        "rigid body bone index is out of range", ReferenceObjectKind::rigidBody, bodyIndex);
+    for (std::size_t jointIndex = 0; jointIndex < model.joints.size(); ++jointIndex) {
+        const auto &joint = model.joints[jointIndex];
+        addIndexedError(result, inRange(joint.bodyA, model.rigidBodies.size()), "joint A body index is out of range",
+                        ReferenceObjectKind::joint, jointIndex);
+        addIndexedError(result, inRange(joint.bodyB, model.rigidBodies.size()), "joint B body index is out of range",
+                        ReferenceObjectKind::joint, jointIndex);
     }
     if (!model.softBodies.empty())
         addError(result, model.metadata.version >= 2.1F, "soft bodies require PMX 2.1");
