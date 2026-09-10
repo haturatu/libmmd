@@ -104,7 +104,8 @@ std::uint32_t readCount(std::istream &input, std::string_view field, std::uint32
     input.seekg(0, std::ios::end);
     const auto end = input.tellg();
     input.seekg(position);
-    if (position < 0 || end < position || static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(end - position))
+    if (position < 0 || end < position ||
+        static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(end - position))
         throw std::runtime_error("implausible VMD " + std::string(field));
     return value;
 }
