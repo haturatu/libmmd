@@ -16,6 +16,26 @@ namespace mmd {
 namespace {
 
 constexpr std::int32_t maxElements = 300'000'000;
+constexpr std::size_t maxDecodedBytes = 512U * 1024U * 1024U;
+
+std::size_t remainingBytes(std::istream &input) {
+    const auto position = input.tellg();
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    input.seekg(position);
+    if (position < 0 || end < position)
+        throw std::runtime_error("cannot determine remaining PMX bytes");
+    return static_cast<std::size_t>(end - position);
+}
+
+template <typename T>
+void checkedResize(std::vector<T> &destination, std::size_t count, std::istream &input, std::size_t minimumEncodedBytes,
+                   std::string_view field) {
+    if (minimumEncodedBytes == 0 || count > remainingBytes(input) / minimumEncodedBytes ||
+        count > maxDecodedBytes / sizeof(T))
+        throw std::runtime_error("implausible PMX " + std::string(field));
+    destination.resize(count);
+}
 
 template <typename T> T read(std::istream &input, std::string_view field) {
     static_assert(std::is_trivially_copyable_v<T>);
@@ -166,7 +186,10 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
 }
 
 void readVertices(std::istream &input, const Header &header, PmxModel &model) {
-    model.vertices.resize(static_cast<std::size_t>(header.metadata.vertexCount));
+    const auto minimumEncodedBytes = 12U + 12U + 8U + static_cast<std::size_t>(header.metadata.additionalUvCount) * 16U +
+                                     1U + static_cast<std::size_t>(header.settings[5]) + 4U;
+    checkedResize(model.vertices, static_cast<std::size_t>(header.metadata.vertexCount), input, minimumEncodedBytes,
+                  "vertex count");
     const auto boneSize = header.settings[5];
     for (auto &vertex : model.vertices) {
         vertex.position = readFloatArray<3>(input, "position");
@@ -518,20 +541,26 @@ PmxMesh pmx::loadMesh(const std::filesystem::path &path) {
     PmxMesh mesh{.metadata = std::move(model.metadata),
                  .vertices = std::move(model.vertices),
                  .indices = std::move(model.indices)};
-    if (mesh.vertices.empty())
-        return mesh;
-    auto minimum = mesh.vertices.front().position;
-    auto maximum = minimum;
+    Float3 minimum{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+                   std::numeric_limits<float>::infinity()};
+    Float3 maximum{-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+                   -std::numeric_limits<float>::infinity()};
+    bool found = false;
     for (const auto &vertex : mesh.vertices) {
+        if (!std::ranges::all_of(vertex.position, [](float value) { return std::isfinite(value); }))
+            continue;
+        found = true;
         for (std::size_t axis = 0; axis < 3; ++axis) {
             minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
             maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
         }
     }
+    if (!found)
+        return mesh;
     const Float3 center{(minimum[0] + maximum[0]) * 0.5F, (minimum[1] + maximum[1]) * 0.5F,
                         (minimum[2] + maximum[2]) * 0.5F};
-    const float scale =
-        1.8F / std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 0.001F});
+    const auto extent = std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 0.001F});
+    const float scale = std::isfinite(extent) && extent > 0.0F ? 1.8F / extent : 1.0F;
     for (auto &vertex : mesh.vertices) {
         for (std::size_t axis = 0; axis < 3; ++axis)
             vertex.position[axis] = (vertex.position[axis] - center[axis]) * scale;

@@ -647,10 +647,14 @@ bool skinSdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
                                             model.bones[static_cast<std::size_t>(first)].position, cr0);
     const auto translated1 = transformPoint(global[static_cast<std::size_t>(second)],
                                             model.bones[static_cast<std::size_t>(second)].position, cr1);
-    vertex.position = add(rotate(rotation, sub(vertex.position, vertex.sdefC)),
-                          add(mul(translated0, weight), mul(translated1, 1.0F - weight)));
-    vertex.normal = normalized(rotate(rotation, vertex.normal));
-    return finite(vertex.position) && finite(vertex.normal);
+    const auto position = add(rotate(rotation, sub(vertex.position, vertex.sdefC)),
+                              add(mul(translated0, weight), mul(translated1, 1.0F - weight)));
+    const auto normal = normalized(rotate(rotation, vertex.normal));
+    if (!finite(position) || !finite(normal))
+        return false;
+    vertex.position = position;
+    vertex.normal = normal;
+    return true;
 }
 
 bool skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
@@ -693,10 +697,14 @@ bool skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
     for (std::size_t component = 0; component < 4; ++component)
         dual[component] -= real[component] * projection;
     const auto translation = multiplyRaw(dual, conjugate(real));
-    vertex.position =
+    const auto position =
         add(rotate(real, vertex.position), {2.0F * translation[0], 2.0F * translation[1], 2.0F * translation[2]});
-    vertex.normal = normalized(rotate(real, vertex.normal));
-    return finite(vertex.position) && finite(vertex.normal);
+    const auto normal = normalized(rotate(real, vertex.normal));
+    if (!finite(position) || !finite(normal))
+        return false;
+    vertex.position = position;
+    vertex.normal = normal;
+    return true;
 }
 
 } // namespace
