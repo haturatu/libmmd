@@ -343,32 +343,41 @@ float sampleMorph(MorphTrack &track, float frame) {
 void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local, std::vector<GlobalPose> &global,
                       std::vector<std::uint8_t> &state) {
     std::fill(state.begin(), state.end(), std::uint8_t{0});
-    const auto resolve = [&](const auto &self, std::size_t index) -> void {
-        if (state[index] == 2)
-            return;
-        if (state[index] == 1) { // malformed parent cycle
-            global[index] = {add(model.bones[index].position, local[index].translation), local[index].rotation};
-            state[index] = 2;
-            return;
-        }
-        state[index] = 1;
-        const auto parent = model.bones[index].parent;
+    std::vector<std::vector<std::size_t>> children(model.bones.size());
+    std::vector<std::size_t> indegree(model.bones.size());
+    for (std::size_t child = 0; child < model.bones.size(); ++child) {
+        const auto parent = model.bones[child].parent;
         if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size()) {
-            self(self, static_cast<std::size_t>(parent));
-            const auto bindOffset =
-                sub(model.bones[index].position, model.bones[static_cast<std::size_t>(parent)].position);
-            global[index].position = add(
-                global[static_cast<std::size_t>(parent)].position,
-                rotate(global[static_cast<std::size_t>(parent)].rotation, add(bindOffset, local[index].translation)));
-            global[index].rotation = multiply(global[static_cast<std::size_t>(parent)].rotation, local[index].rotation);
+            children[static_cast<std::size_t>(parent)].push_back(child);
+            ++indegree[child];
+        }
+    }
+    std::vector<std::size_t> pending;
+    for (std::size_t index = 0; index < model.bones.size(); ++index)
+        if (indegree[index] == 0)
+            pending.push_back(index);
+    const auto calculate = [&](std::size_t index) {
+        const auto parent = model.bones[index].parent;
+        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() && state[static_cast<std::size_t>(parent)] == 2) {
+            const auto parentIndex = static_cast<std::size_t>(parent);
+            const auto bindOffset = sub(model.bones[index].position, model.bones[parentIndex].position);
+            global[index].position = add(global[parentIndex].position, rotate(global[parentIndex].rotation, add(bindOffset, local[index].translation)));
+            global[index].rotation = multiply(global[parentIndex].rotation, local[index].rotation);
         } else {
-            global[index].position = add(model.bones[index].position, local[index].translation);
-            global[index].rotation = local[index].rotation;
+            global[index] = {add(model.bones[index].position, local[index].translation), local[index].rotation};
         }
         state[index] = 2;
     };
-    for (std::size_t i = 0; i < model.bones.size(); ++i)
-        resolve(resolve, i);
+    while (!pending.empty()) {
+        const auto index = pending.back(); pending.pop_back();
+        calculate(index);
+        for (const auto child : children[index])
+            if (--indegree[child] == 0)
+                pending.push_back(child);
+    }
+    for (std::size_t index = 0; index < model.bones.size(); ++index)
+        if (state[index] != 2)
+            calculate(index); // deterministic root fallback for malformed cycles
 }
 
 #if LIBMMD_ENABLE_PHYSICS
@@ -376,9 +385,12 @@ void calculateGlobalSubtree(const PmxModel &model, const std::vector<LocalPose> 
                             const std::vector<std::vector<std::size_t>> &children, std::size_t root,
                             std::vector<std::uint8_t> &state, std::vector<std::size_t> &touched) {
     touched.clear();
-    const auto update = [&](const auto &self, std::size_t index) -> void {
+    std::vector<std::size_t> pending{root};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
         if (state[index] != 0)
-            return;
+            continue;
         state[index] = 1;
         touched.push_back(index);
         const auto parent = model.bones[index].parent;
@@ -394,9 +406,8 @@ void calculateGlobalSubtree(const PmxModel &model, const std::vector<LocalPose> 
             global[index].rotation = local[index].rotation;
         }
         for (const auto child : children[index])
-            self(self, child);
-    };
-    update(update, root);
+            pending.push_back(child);
+    }
     for (const auto index : touched)
         state[index] = 0;
 }
