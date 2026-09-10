@@ -1189,8 +1189,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.beforePhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones,
-            impl_->dirtyScratch, ikEnabled_);
+            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones, impl_->dirtyScratch,
+            ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
     for (std::size_t i = 0; i < global.size(); ++i)
@@ -1311,8 +1311,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.afterPhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones,
-            impl_->dirtyScratch, ikEnabled_);
+            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones, impl_->dirtyScratch,
+            ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;
         global[i] = poses[i].global;
