@@ -927,22 +927,20 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         if (override.index < morphWeights.size())
             morphWeights[override.index] = std::clamp(override.weight, 0.0F, 1.0F);
     }
-    std::vector<std::uint8_t> morphStack(model_.morphs.size());
-    std::function<void(std::size_t, float)> applyMorph = [&](std::size_t index, float weight) {
-        if (index >= model_.morphs.size() || morphStack[index] != 0 || !std::isfinite(weight) ||
-            std::abs(weight) < 1e-8F)
+    std::vector<std::pair<std::size_t, float>> morphWork;
+    constexpr std::uint64_t maxMorphExpansionSteps = 1'000'000;
+    const auto applyMorph = [&](std::size_t index, float weight) {
+        if (index >= model_.morphs.size() || !std::isfinite(weight) || std::abs(weight) < 1e-8F)
             return;
-        morphStack[index] = 1;
         const auto &morph = model_.morphs[index];
         if (gpuSkinning && morph.type == 1) {
             result.morphWeights[index] += weight;
-            morphStack[index] = 0;
             return;
         }
         for (const auto &offset : morph.offsets) {
             if (morph.type == 0 || morph.type == 9) {
                 if (offset.index >= 0 && std::isfinite(offset.scalar))
-                    applyMorph(static_cast<std::size_t>(offset.index), weight * offset.scalar);
+                    morphWork.push_back({static_cast<std::size_t>(offset.index), weight * offset.scalar});
             } else if (morph.type == 1 && offset.index >= 0 &&
                        static_cast<std::size_t>(offset.index) < result.vertices.size()) {
                 result.vertices[static_cast<std::size_t>(offset.index)].position =
@@ -1021,10 +1019,15 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 }
             }
         }
-        morphStack[index] = 0;
     };
     for (std::size_t i = 0; i < morphWeights.size(); ++i)
-        applyMorph(i, morphWeights[i]);
+        morphWork.push_back({i, morphWeights[i]});
+    std::uint64_t morphSteps{};
+    while (!morphWork.empty() && morphSteps++ < maxMorphExpansionSteps) {
+        const auto [index, weight] = morphWork.back();
+        morphWork.pop_back();
+        applyMorph(index, weight);
+    }
 
     auto &poses = impl_->poses;
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
