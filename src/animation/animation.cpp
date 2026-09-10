@@ -451,7 +451,7 @@ Float3 quaternionToEuler(Quat rotation) {
 }
 
 Quat applyIkLimit(Quat rotation, const PmxIkLink &link) {
-    if (!link.limited)
+    if (!link.limited || !finite(link.minimum) || !finite(link.maximum))
         return normalize(rotation);
     auto euler = quaternionToEuler(rotation);
     for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -473,7 +473,8 @@ void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector
     for (const auto index : order) {
         auto &pose = poses[index];
         const auto &bone = model.bones[index];
-        if (bone.inheritParent >= 0 && static_cast<std::size_t>(bone.inheritParent) < poses.size()) {
+        if (bone.inheritParent >= 0 && static_cast<std::size_t>(bone.inheritParent) < poses.size() &&
+            std::isfinite(bone.inheritRatio)) {
             const auto parent = static_cast<std::size_t>(bone.inheritParent);
             LocalPose appendSource;
             if ((bone.flags & 0x0080U) != 0) {
@@ -549,8 +550,8 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
         return;
     for (const auto ikIndex : order) {
         const auto &ik = model.bones[ikIndex];
-        if ((ik.flags & 0x0020U) == 0 || ik.ikTarget < 0 || static_cast<std::size_t>(ik.ikTarget) >= poses.size() ||
-            !ikEnabledAt(motion, ik.name, frame))
+        if ((ik.flags & 0x0020U) == 0 || !std::isfinite(ik.ikLimitAngle) || ik.ikTarget < 0 ||
+            static_cast<std::size_t>(ik.ikTarget) >= poses.size() || !ikEnabledAt(motion, ik.name, frame))
             continue;
         const int loops = std::clamp(ik.ikLoopCount, 0, 255);
         for (int loop = 0; loop < loops; ++loop) {
