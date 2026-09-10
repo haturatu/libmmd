@@ -21,6 +21,10 @@ namespace {
 
 using Quat = Float4;
 
+template <std::size_t N> bool finite(const std::array<float, N> &value) {
+    return std::all_of(value.begin(), value.end(), [](float component) { return std::isfinite(component); });
+}
+
 Float3 add(const Float3 &a, const Float3 &b) {
     return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
 }
@@ -614,12 +618,14 @@ Float3 transformPoint(const GlobalPose &pose, const Float3 &bindPosition, const 
     return add(rotate(pose.rotation, sub(value, bindPosition)), pose.position);
 }
 
-void skinSdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
+bool skinSdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
     const auto first = vertex.bones[0];
     const auto second = vertex.bones[1];
     if (first < 0 || second < 0 || static_cast<std::size_t>(first) >= global.size() ||
         static_cast<std::size_t>(second) >= global.size())
-        return;
+        return false;
+    if (!std::isfinite(vertex.weights[0]) || !finite(vertex.sdefC) || !finite(vertex.sdefR0) || !finite(vertex.sdefR1))
+        return false;
     const float weight = std::clamp(vertex.weights[0], 0.0F, 1.0F);
     const auto halfDelta = mul(sub(vertex.sdefR0, vertex.sdefR1), 0.5F);
     const auto cr0 = add(vertex.sdefC, mul(halfDelta, 1.0F - weight));
@@ -633,9 +639,10 @@ void skinSdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
     vertex.position = add(rotate(rotation, sub(vertex.position, vertex.sdefC)),
                           add(mul(translated0, weight), mul(translated1, 1.0F - weight)));
     vertex.normal = normalized(rotate(rotation, vertex.normal));
+    return finite(vertex.position) && finite(vertex.normal);
 }
 
-void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
+bool skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
     Quat real{};
     Quat dual{};
     Quat pivot{};
@@ -643,7 +650,7 @@ void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
     for (std::size_t influence = 0; influence < 4; ++influence) {
         const auto bone = vertex.bones[influence];
         float weight = vertex.weights[influence];
-        if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || weight == 0.0F)
+        if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || !std::isfinite(weight) || weight <= 0.0F)
             continue;
         const auto index = static_cast<std::size_t>(bone);
         const auto rotation = global[index].rotation;
@@ -665,8 +672,8 @@ void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
         }
     }
     const float magnitude = std::sqrt(real[0] * real[0] + real[1] * real[1] + real[2] * real[2] + real[3] * real[3]);
-    if (!initialized || magnitude <= 1e-8F)
-        return;
+    if (!initialized || !std::isfinite(magnitude) || !(magnitude > 1e-8F))
+        return false;
     for (std::size_t component = 0; component < 4; ++component) {
         real[component] /= magnitude;
         dual[component] /= magnitude;
@@ -678,6 +685,7 @@ void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
     vertex.position =
         add(rotate(real, vertex.position), {2.0F * translation[0], 2.0F * translation[1], 2.0F * translation[2]});
     vertex.normal = normalized(rotate(real, vertex.normal));
+    return finite(vertex.position) && finite(vertex.normal);
 }
 
 } // namespace
@@ -1116,12 +1124,12 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 
     for (auto &vertex : result.vertices) {
         if (!gpuSkinning && vertex.weightType == PmxWeightType::sdef) {
-            skinSdef(vertex, model_, global);
-            continue;
+            if (skinSdef(vertex, model_, global))
+                continue;
         }
         if (!gpuSkinning && vertex.weightType == PmxWeightType::qdef) {
-            skinQdef(vertex, model_, global);
-            continue;
+            if (skinQdef(vertex, model_, global))
+                continue;
         }
         if (gpuSkinning)
             continue;
@@ -1135,7 +1143,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         for (std::size_t influence = 0; influence < influenceCount; ++influence) {
             const auto bone = vertex.bones[influence];
             const float weight = vertex.weights[influence];
-            if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || weight == 0.0F)
+            if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || !std::isfinite(weight) || weight <= 0.0F)
                 continue;
             position = add(position,
                            mul(transformPoint(global[static_cast<std::size_t>(bone)],
@@ -1144,7 +1152,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             normal = add(normal, mul(rotate(global[static_cast<std::size_t>(bone)].rotation, vertex.normal), weight));
             totalWeight += weight;
         }
-        if (totalWeight > 1e-6F) {
+        if (std::isfinite(totalWeight) && totalWeight > 1e-6F && finite(position) && finite(normal)) {
             vertex.position = mul(position, 1.0F / totalWeight);
             vertex.normal = normalized(normal);
         }
@@ -1153,24 +1161,31 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 }
 
 PreviewNormalization previewNormalization(const PmxModel &model) {
-    if (model.vertices.empty())
-        return {};
-    auto minimum = model.vertices.front().position;
-    auto maximum = minimum;
+    Float3 minimum{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()};
+    Float3 maximum{-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()};
+    bool found = false;
     for (const auto &vertex : model.vertices) {
+        if (!finite(vertex.position))
+            continue;
+        found = true;
         for (std::size_t axis = 0; axis < 3; ++axis) {
             minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
             maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
         }
     }
+    if (!found)
+        return {};
     PreviewNormalization result;
     result.center = {(minimum[0] + maximum[0]) * 0.5F, (minimum[1] + maximum[1]) * 0.5F,
                      (minimum[2] + maximum[2]) * 0.5F};
-    result.scale = 1.8F / std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 0.001F});
+    const auto extent = std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 0.001F});
+    result.scale = std::isfinite(extent) && extent > 0.0F ? 1.8F / extent : 1.0F;
     return result;
 }
 
 void normalizeForPreview(std::vector<PmxVertex> &vertices, const PreviewNormalization &normalization) {
+    if (!finite(normalization.center) || !std::isfinite(normalization.scale) || !(normalization.scale > 0.0F))
+        return;
     for (auto &vertex : vertices)
         for (std::size_t axis = 0; axis < 3; ++axis) {
             vertex.position[axis] = (vertex.position[axis] - normalization.center[axis]) * normalization.scale;

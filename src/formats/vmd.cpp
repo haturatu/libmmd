@@ -55,6 +55,15 @@ template <std::size_t N> std::array<float, N> readFloatArray(std::istream &input
     input.read(reinterpret_cast<char *>(value.data()), static_cast<std::streamsize>(sizeof(value)));
     if (!input)
         throw std::runtime_error("truncated VMD while reading " + std::string(field));
+    if (!std::all_of(value.begin(), value.end(), [](float component) { return std::isfinite(component); }))
+        throw std::runtime_error("non-finite VMD " + std::string(field));
+    return value;
+}
+
+float readFiniteFloat(std::istream &input, std::string_view field) {
+    const auto value = read<float>(input, field);
+    if (!std::isfinite(value))
+        throw std::runtime_error("non-finite VMD " + std::string(field));
     return value;
 }
 
@@ -303,7 +312,7 @@ VmdMotion loadVmd(const std::filesystem::path &path) {
     for (auto &key : motion.morphs) {
         key.name = readName<15>(input, "morph name");
         key.frame = read<std::uint32_t>(input, "morph frame");
-        key.weight = read<float>(input, "morph weight");
+        key.weight = readFiniteFloat(input, "morph weight");
         updateLastFrame(motion, key.frame);
     }
     if (input.peek() == std::char_traits<char>::eof())
@@ -311,7 +320,7 @@ VmdMotion loadVmd(const std::filesystem::path &path) {
     motion.cameras.resize(readCount(input, "camera key count"));
     for (auto &key : motion.cameras) {
         key.frame = read<std::uint32_t>(input, "camera frame");
-        key.distance = read<float>(input, "camera distance");
+        key.distance = readFiniteFloat(input, "camera distance");
         key.position = readFloatArray<3>(input, "camera position");
         key.rotation = readFloatArray<3>(input, "camera rotation");
         input.read(reinterpret_cast<char *>(key.interpolation.data()),
@@ -337,7 +346,7 @@ VmdMotion loadVmd(const std::filesystem::path &path) {
     for (auto &key : motion.shadows) {
         key.frame = read<std::uint32_t>(input, "shadow frame");
         key.mode = read<std::uint8_t>(input, "shadow mode");
-        key.distance = read<float>(input, "shadow distance");
+        key.distance = readFiniteFloat(input, "shadow distance");
         updateLastFrame(motion, key.frame);
     }
     if (input.peek() == std::char_traits<char>::eof())
