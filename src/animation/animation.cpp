@@ -605,8 +605,8 @@ bool ikEnabledAt(const VmdMotion *motion, std::string_view name, float frame) {
 
 void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
              const VmdMotion *motion, float frame, std::vector<LocalPose> &localScratch,
-             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState,
-             std::span<const std::size_t> parentOrder, const std::vector<std::vector<std::size_t>> &children,
+             std::vector<GlobalPose> &globalScratch, std::span<const std::size_t> parentOrder,
+             const std::vector<std::vector<std::size_t>> &children,
              const std::vector<std::vector<std::size_t>> &inheritDependents, std::vector<std::uint8_t> &dirty,
              std::vector<std::size_t> &pending, bool enabled) {
     if (!enabled)
@@ -1182,7 +1182,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.beforePhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState, impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones,
+            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones,
             impl_->dirtyScratch, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
@@ -1304,7 +1304,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.afterPhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState, impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones,
+            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones,
             impl_->dirtyScratch, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;
