@@ -314,10 +314,10 @@ ValidationResult pmx::validate(const PmxModel &model) {
                 : morph.type == 1                      ? finite(offset.vector3)
                 : morph.type == 2                      ? finite(offset.vector3) && finite(offset.vector4)
                 : (morph.type >= 3 && morph.type <= 7) ? finite(offset.vector4)
-                : morph.type == 8  ? finite(offset.materialVectors[0]) && finite(offset.materialVectors[1]) &&
-                                         finite(offset.materialVectors[2]) && finite(offset.materialVectors[3]) &&
-                                         finite(offset.materialVectors[4]) && finite(offset.materialVectors[5]) &&
-                                         finite(offset.materialVectors[6])
+                : morph.type == 8  ? (finite(offset.materialVectors[0]) && finite(offset.materialVectors[1]) &&
+                                    finite(offset.materialVectors[2]) && finite(offset.materialVectors[3]) &&
+                                    finite(offset.materialVectors[4]) && finite(offset.materialVectors[5]) &&
+                                    finite(offset.materialVectors[6]))
                 : morph.type == 10 ? finite(offset.vector3) && finite(offset.tertiaryVector3)
                                    : true;
             addIndexedError(result, valuesFinite, "morph offset contains non-finite values", ReferenceObjectKind::morph,
