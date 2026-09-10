@@ -341,21 +341,8 @@ float sampleMorph(MorphTrack &track, float frame) {
 }
 
 void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local, std::vector<GlobalPose> &global,
-                      std::vector<std::uint8_t> &state) {
+                      std::vector<std::uint8_t> &state, std::span<const std::size_t> parentOrder) {
     std::fill(state.begin(), state.end(), std::uint8_t{0});
-    std::vector<std::vector<std::size_t>> children(model.bones.size());
-    std::vector<std::size_t> indegree(model.bones.size());
-    for (std::size_t child = 0; child < model.bones.size(); ++child) {
-        const auto parent = model.bones[child].parent;
-        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size()) {
-            children[static_cast<std::size_t>(parent)].push_back(child);
-            ++indegree[child];
-        }
-    }
-    std::vector<std::size_t> pending;
-    for (std::size_t index = 0; index < model.bones.size(); ++index)
-        if (indegree[index] == 0)
-            pending.push_back(index);
     const auto calculate = [&](std::size_t index) {
         const auto parent = model.bones[index].parent;
         if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() &&
@@ -371,13 +358,8 @@ void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local
         }
         state[index] = 2;
     };
-    while (!pending.empty()) {
-        const auto index = pending.back();
-        pending.pop_back();
+    for (const auto index : parentOrder) {
         calculate(index);
-        for (const auto child : children[index])
-            if (--indegree[child] == 0)
-                pending.push_back(child);
     }
     for (std::size_t index = 0; index < model.bones.size(); ++index)
         if (state[index] != 2)
@@ -464,7 +446,7 @@ Quat applyIkLimit(Quat rotation, const PmxIkLink &link) {
 
 void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
                       std::vector<LocalPose> &localScratch, std::vector<GlobalPose> &globalScratch,
-                      std::vector<std::uint8_t> &globalState) {
+                      std::vector<std::uint8_t> &globalState, std::span<const std::size_t> parentOrder) {
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
     for (const auto index : order) {
         poses[index].append = {};
@@ -507,7 +489,7 @@ void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector
 
     for (std::size_t i = 0; i < poses.size(); ++i)
         localScratch[i] = poses[i].local;
-    calculateGlobals(model, localScratch, globalScratch, globalState);
+    calculateGlobals(model, localScratch, globalScratch, globalState, parentOrder);
     for (std::size_t i = 0; i < poses.size(); ++i)
         poses[i].global = globalScratch[i];
 }
@@ -545,7 +527,8 @@ bool ikEnabledAt(const VmdMotion *motion, std::string_view name, float frame) {
 
 void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
              const VmdMotion *motion, float frame, std::vector<LocalPose> &localScratch,
-             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState, bool enabled) {
+             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState,
+             std::span<const std::size_t> parentOrder, bool enabled) {
     if (!enabled)
         return;
     for (const auto ikIndex : order) {
@@ -594,14 +577,14 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
                     multiply(poses[linkIndex].local.rotation, conjugate(poses[linkIndex].withoutIk.rotation));
                 // Rebuild the current phase's append relationships while
                 // retaining the direct cross-phase link update above.
-                rebuildBonePoses(model, order, poses, localScratch, globalScratch, globalState);
+                rebuildBonePoses(model, order, poses, localScratch, globalScratch, globalState, parentOrder);
             }
             if (length(sub(poses[static_cast<std::size_t>(ik.ikTarget)].global.position,
                            poses[ikIndex].global.position)) < 1e-4F)
                 break;
         }
     }
-    rebuildBonePoses(model, order, poses, localScratch, globalScratch, globalState);
+    rebuildBonePoses(model, order, poses, localScratch, globalScratch, globalState, parentOrder);
 }
 
 void logLimbDiagnostics(const PmxModel &model, const std::unordered_map<std::string_view, BoneTrack> &boneTracks,
@@ -763,6 +746,7 @@ struct MmdAnimator::Impl {
     std::unordered_map<std::string_view, MorphTrack> morphTracks;
     std::unordered_map<std::uint32_t, BezierLut> bezierLuts;
     std::vector<std::vector<std::size_t>> boneChildren;
+    std::vector<std::size_t> parentOrder;
     std::vector<std::uint8_t> subtreeState;
     std::vector<std::size_t> subtreeScratch;
 };
@@ -774,14 +758,23 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
     impl_->globalScratch.resize(model_.bones.size());
     impl_->globalState.resize(model_.bones.size());
     impl_->boneChildren.resize(model_.bones.size());
+    std::vector<std::size_t> indegree(model_.bones.size());
     impl_->subtreeState.resize(model_.bones.size());
     for (std::size_t index = 0; index < model_.bones.size(); ++index) {
         const auto parent = model_.bones[index].parent;
         if (parent >= 0 && static_cast<std::size_t>(parent) < model_.bones.size() &&
             static_cast<std::size_t>(parent) != index) {
             impl_->boneChildren[static_cast<std::size_t>(parent)].push_back(index);
+            ++indegree[index];
         }
     }
+    for (std::size_t index = 0; index < indegree.size(); ++index)
+        if (indegree[index] == 0)
+            impl_->parentOrder.push_back(index);
+    for (std::size_t cursor = 0; cursor < impl_->parentOrder.size(); ++cursor)
+        for (const auto child : impl_->boneChildren[impl_->parentOrder[cursor]])
+            if (--indegree[child] == 0)
+                impl_->parentOrder.push_back(child);
     impl_->subtreeScratch.reserve(model_.bones.size());
 }
 MmdAnimator::~MmdAnimator() = default;
@@ -1059,9 +1052,9 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     auto &global = impl_->globalScratch;
     const auto &boneOrders = impl_->boneOrders;
     rebuildBonePoses(model_, boneOrders.beforePhysics, poses, impl_->localScratch, impl_->globalScratch,
-                     impl_->globalState);
+                     impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState, ikEnabled_);
+            impl_->globalState, impl_->parentOrder, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
     for (std::size_t i = 0; i < global.size(); ++i)
@@ -1180,9 +1173,9 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     // performed when physics has no dynamic bodies so their VMD/IK result is
     // still present in a model that only uses post-physics ordering.
     rebuildBonePoses(model_, boneOrders.afterPhysics, poses, impl_->localScratch, impl_->globalScratch,
-                     impl_->globalState);
+                     impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState, ikEnabled_);
+            impl_->globalState, impl_->parentOrder, ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;
         global[i] = poses[i].global;
