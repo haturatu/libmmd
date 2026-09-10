@@ -28,13 +28,42 @@ std::size_t remainingBytes(std::istream &input) {
     return static_cast<std::size_t>(end - position);
 }
 
+struct DecodedBudget {
+    std::size_t remaining{maxDecodedBytes};
+};
+thread_local DecodedBudget *activeBudget{};
+
+class ScopedDecodedBudget final {
+  public:
+    explicit ScopedDecodedBudget(DecodedBudget &budget) : previous_(activeBudget) {
+        activeBudget = &budget;
+    }
+    ~ScopedDecodedBudget() {
+        activeBudget = previous_;
+    }
+    ScopedDecodedBudget(const ScopedDecodedBudget &) = delete;
+    ScopedDecodedBudget &operator=(const ScopedDecodedBudget &) = delete;
+
+  private:
+    DecodedBudget *previous_{};
+};
+
+template <typename T>
+void checkedResize(std::vector<T> &destination, std::size_t count, std::istream &input, std::size_t minimumEncodedBytes,
+                   std::string_view field, DecodedBudget &budget) {
+    if (minimumEncodedBytes == 0 || count > remainingBytes(input) / minimumEncodedBytes ||
+        count > budget.remaining / sizeof(T))
+        throw std::runtime_error("implausible PMX " + std::string(field));
+    budget.remaining -= count * sizeof(T);
+    destination.resize(count);
+}
+
 template <typename T>
 void checkedResize(std::vector<T> &destination, std::size_t count, std::istream &input, std::size_t minimumEncodedBytes,
                    std::string_view field) {
-    if (minimumEncodedBytes == 0 || count > remainingBytes(input) / minimumEncodedBytes ||
-        count > maxDecodedBytes / sizeof(T))
-        throw std::runtime_error("implausible PMX " + std::string(field));
-    destination.resize(count);
+    if (activeBudget == nullptr)
+        throw std::runtime_error("missing PMX decoded allocation budget");
+    checkedResize(destination, count, input, minimumEncodedBytes, field, *activeBudget);
 }
 
 template <typename T> T read(std::istream &input, std::string_view field) {
@@ -179,12 +208,12 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
     return result;
 }
 
-void readVertices(std::istream &input, const Header &header, PmxModel &model) {
+void readVertices(std::istream &input, const Header &header, PmxModel &model, DecodedBudget &budget) {
     const auto minimumEncodedBytes = 12U + 12U + 8U +
                                      static_cast<std::size_t>(header.metadata.additionalUvCount) * 16U + 1U +
                                      static_cast<std::size_t>(header.settings[5]) + 4U;
     checkedResize(model.vertices, static_cast<std::size_t>(header.metadata.vertexCount), input, minimumEncodedBytes,
-                  "vertex count");
+                  "vertex count", budget);
     const auto boneSize = header.settings[5];
     for (auto &vertex : model.vertices) {
         vertex.position = readFloatArray<3>(input, "position");
@@ -229,14 +258,14 @@ void readVertices(std::istream &input, const Header &header, PmxModel &model) {
     }
 }
 
-void readMaterials(std::istream &input, const Header &header, PmxModel &model) {
+void readMaterials(std::istream &input, const Header &header, PmxModel &model, DecodedBudget &budget) {
     const auto textureCount = readCount(input, "texture count", 1'000'000);
     model.textures.reserve(static_cast<std::size_t>(textureCount));
     for (std::int32_t i = 0; i < textureCount; ++i) {
         model.textures.push_back({readText(input, header.metadata.textEncoding)});
     }
     const auto count = readCount(input, "material count", 1'000'000);
-    checkedResize(model.materials, static_cast<std::size_t>(count), input, 20, "material count");
+    checkedResize(model.materials, static_cast<std::size_t>(count), input, 20, "material count", budget);
     std::uint64_t coveredIndices = 0;
     for (auto &material : model.materials) {
         material.name = readText(input, header.metadata.textEncoding);
@@ -264,9 +293,9 @@ void readMaterials(std::istream &input, const Header &header, PmxModel &model) {
         throw std::runtime_error("PMX material ranges do not cover indices");
 }
 
-void readBones(std::istream &input, const Header &header, PmxModel &model) {
+void readBones(std::istream &input, const Header &header, PmxModel &model, DecodedBudget &budget) {
     const auto count = readCount(input, "bone count", 10'000'000);
-    checkedResize(model.bones, static_cast<std::size_t>(count), input, 24, "bone count");
+    checkedResize(model.bones, static_cast<std::size_t>(count), input, 24, "bone count", budget);
     for (auto &bone : model.bones) {
         bone.name = readText(input, header.metadata.textEncoding);
         bone.englishName = readText(input, header.metadata.textEncoding);
@@ -296,7 +325,7 @@ void readBones(std::istream &input, const Header &header, PmxModel &model) {
             bone.ikLimitAngle = read<float>(input, "IK angle");
             const auto linkCount = readCount(input, "IK link count", 1'000'000);
             checkedResize(bone.ikLinks, static_cast<std::size_t>(linkCount), input,
-                          static_cast<std::size_t>(header.settings[5]) + 1U, "IK link count");
+                          static_cast<std::size_t>(header.settings[5]) + 1U, "IK link count", budget);
             for (auto &link : bone.ikLinks) {
                 link.bone = readSignedIndex(input, header.settings[5], "IK link bone");
                 link.limited = read<std::uint8_t>(input, "IK link limit") != 0;
@@ -309,9 +338,9 @@ void readBones(std::istream &input, const Header &header, PmxModel &model) {
     }
 }
 
-void readMorphs(std::istream &input, const Header &header, PmxModel &model) {
+void readMorphs(std::istream &input, const Header &header, PmxModel &model, DecodedBudget &budget) {
     const auto count = readCount(input, "morph count", 10'000'000);
-    checkedResize(model.morphs, static_cast<std::size_t>(count), input, 10, "morph count");
+    checkedResize(model.morphs, static_cast<std::size_t>(count), input, 10, "morph count", budget);
     for (auto &morph : model.morphs) {
         morph.name = readText(input, header.metadata.textEncoding);
         morph.englishName = readText(input, header.metadata.textEncoding);
@@ -321,7 +350,7 @@ void readMorphs(std::istream &input, const Header &header, PmxModel &model) {
             throw std::runtime_error("invalid PMX morph type");
         }
         const auto offsetCount = readCount(input, "morph offset count", 100'000'000);
-        checkedResize(morph.offsets, static_cast<std::size_t>(offsetCount), input, 5, "morph offset count");
+        checkedResize(morph.offsets, static_cast<std::size_t>(offsetCount), input, 5, "morph offset count", budget);
         for (auto &offset : morph.offsets) {
             if (morph.type == 0 || morph.type == 9) {
                 offset.index = readSignedIndex(input, header.settings[6], "group morph index");
@@ -511,22 +540,25 @@ PmxModel pmx::load(const std::filesystem::path &path) {
     MappedFileStream input(path);
     const auto header = readHeader(input, path);
     PmxModel model;
+    DecodedBudget budget;
+    const ScopedDecodedBudget scopedBudget(budget);
     model.metadata = header.metadata;
     model.format = header.format;
     model.sourcePath = path;
-    readVertices(input, header, model);
+    readVertices(input, header, model, budget);
     const auto indexCount = readCount(input, "index count");
     if (indexCount % 3 != 0)
         throw std::runtime_error("PMX index count is not divisible by three");
-    checkedResize(model.indices, static_cast<std::size_t>(indexCount), input, header.settings[2], "index count");
+    checkedResize(model.indices, static_cast<std::size_t>(indexCount), input, header.settings[2], "index count",
+                  budget);
     for (auto &index : model.indices) {
         index = readVertexIndex(input, header.settings[2]);
         if (index >= model.vertices.size())
             throw std::runtime_error("PMX vertex index out of range");
     }
-    readMaterials(input, header, model);
-    readBones(input, header, model);
-    readMorphs(input, header, model);
+    readMaterials(input, header, model, budget);
+    readBones(input, header, model, budget);
+    readMorphs(input, header, model, budget);
     readDisplayFrames(input, header, model);
     readPhysics(input, header, model);
     readSoftBodies(input, header, model);
