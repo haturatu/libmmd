@@ -928,7 +928,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     }
     std::vector<std::uint8_t> morphStack(model_.morphs.size());
     std::function<void(std::size_t, float)> applyMorph = [&](std::size_t index, float weight) {
-        if (index >= model_.morphs.size() || morphStack[index] != 0 || std::abs(weight) < 1e-8F)
+        if (index >= model_.morphs.size() || morphStack[index] != 0 || !std::isfinite(weight) ||
+            std::abs(weight) < 1e-8F)
             return;
         morphStack[index] = 1;
         const auto &morph = model_.morphs[index];
@@ -938,10 +939,11 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             return;
         }
         for (const auto &offset : morph.offsets) {
-            if (morph.type == 0 || morph.type == 9)
-                applyMorph(static_cast<std::size_t>(offset.index), weight * offset.scalar);
-            else if (morph.type == 1 && offset.index >= 0 &&
-                     static_cast<std::size_t>(offset.index) < result.vertices.size()) {
+            if (morph.type == 0 || morph.type == 9) {
+                if (offset.index >= 0 && std::isfinite(offset.scalar))
+                    applyMorph(static_cast<std::size_t>(offset.index), weight * offset.scalar);
+            } else if (morph.type == 1 && offset.index >= 0 &&
+                       static_cast<std::size_t>(offset.index) < result.vertices.size()) {
                 result.vertices[static_cast<std::size_t>(offset.index)].position =
                     add(result.vertices[static_cast<std::size_t>(offset.index)].position, mul(offset.vector3, weight));
             } else if (morph.type == 2 && offset.index >= 0 && static_cast<std::size_t>(offset.index) < local.size()) {
