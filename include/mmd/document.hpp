@@ -6,8 +6,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -128,11 +128,11 @@ struct BoneIkLinkDraft {
 };
 struct BoneDraft {
     PmxBone value;
-    std::optional<BoneHandle> parent;
-    std::optional<BoneHandle> tailBone;
-    std::optional<BoneHandle> inheritParent;
-    std::optional<BoneHandle> ikTarget;
-    std::vector<BoneIkLinkDraft> ikLinks;
+    std::optional<BoneHandle> parent{};
+    std::optional<BoneHandle> tailBone{};
+    std::optional<BoneHandle> inheritParent{};
+    std::optional<BoneHandle> ikTarget{};
+    std::vector<BoneIkLinkDraft> ikLinks{};
     // All bone-index fields in value are ignored and rebuilt from these
     // handles. The reference-related bits in value.flags must agree with the
     // optional handles and links.
@@ -539,25 +539,25 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setMorphOffset(MorphHandle h, std::size_t index, PmxMorphOffset value);
     [[nodiscard]] bool setVertexMorphOffset(MorphHandle h, std::size_t offset, VertexHandle vertex, Float3 value);
     [[nodiscard]] bool setBoneMorphOffset(MorphHandle h, std::size_t offset, BoneHandle bone, Float3 translation,
-                                           Float4 rotation);
+                                          Float4 rotation);
     [[nodiscard]] bool setGroupMorphOffset(MorphHandle h, std::size_t offset, MorphHandle target, float weight);
     [[nodiscard]] bool setUvMorphOffset(MorphHandle h, std::size_t offset, VertexHandle vertex, std::uint32_t channel,
-                                         Float4 value);
+                                        Float4 value);
     [[nodiscard]] bool setMaterialMorphOffset(MorphHandle h, std::size_t offset, std::optional<MaterialHandle> material,
-                                               std::uint8_t operation, std::array<Float4, 8> values);
+                                              std::uint8_t operation, std::array<Float4, 8> values);
     [[nodiscard]] bool setFlipMorphOffset(MorphHandle h, std::size_t offset, MorphHandle target, float weight);
     [[nodiscard]] bool setImpulseMorphOffset(MorphHandle h, std::size_t offset, RigidBodyHandle body, Float3 velocity,
-                                              Float3 torque, bool local);
+                                             Float3 torque, bool local);
     [[nodiscard]] bool addMorphOffset(MorphHandle h, PmxMorphOffset value);
     [[nodiscard]] bool addVertexMorphOffset(MorphHandle h, VertexHandle vertex, Float3 value);
     [[nodiscard]] bool addBoneMorphOffset(MorphHandle h, BoneHandle bone, Float3 translation, Float4 rotation);
     [[nodiscard]] bool addGroupMorphOffset(MorphHandle h, MorphHandle target, float weight);
     [[nodiscard]] bool addUvMorphOffset(MorphHandle h, VertexHandle vertex, std::uint32_t channel, Float4 value);
-    [[nodiscard]] bool addMaterialMorphOffset(MorphHandle h, std::optional<MaterialHandle> material, std::uint8_t operation,
-                                               std::array<Float4, 8> values);
+    [[nodiscard]] bool addMaterialMorphOffset(MorphHandle h, std::optional<MaterialHandle> material,
+                                              std::uint8_t operation, std::array<Float4, 8> values);
     [[nodiscard]] bool addFlipMorphOffset(MorphHandle h, MorphHandle target, float weight);
     [[nodiscard]] bool addImpulseMorphOffset(MorphHandle h, RigidBodyHandle body, Float3 velocity, Float3 torque,
-                                              bool local);
+                                             bool local);
     [[nodiscard]] bool eraseMorphOffset(MorphHandle h, std::size_t index);
     [[nodiscard]] bool moveMorphOffset(MorphHandle h, std::size_t from, std::size_t to);
     [[nodiscard]] bool moveMorph(MorphHandle h, std::size_t destination);
@@ -574,8 +574,8 @@ class PmxDocument::Transaction {
     [[nodiscard]] bool setRigidBodyBone(RigidBodyHandle h, std::optional<BoneHandle> value);
     [[nodiscard]] bool setRigidBodyShape(RigidBodyHandle h, std::uint8_t shape, Float3 size);
     [[nodiscard]] bool setRigidBodyTransform(RigidBodyHandle h, Float3 position, Float3 rotation);
-    [[nodiscard]] bool setRigidBodyPhysical(RigidBodyHandle h, float mass, float linearDamping,
-                                             float angularDamping, float restitution, float friction);
+    [[nodiscard]] bool setRigidBodyPhysical(RigidBodyHandle h, float mass, float linearDamping, float angularDamping,
+                                            float restitution, float friction);
     [[nodiscard]] bool setRigidBodyCollision(RigidBodyHandle h, std::uint8_t group, std::uint16_t mask);
     [[nodiscard]] bool setRigidBodyMode(RigidBodyHandle h, std::uint8_t mode);
     [[nodiscard]] RigidBodyHandle addRigidBody(RigidBodyDraft draft) {

@@ -200,7 +200,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
                         "material sphere texture index is out of range", ReferenceObjectKind::material, materialIndex);
         if (material.toonMode == 0)
             addIndexedError(result, inRange(material.toonTextureIndex, model.textures.size()),
-                            "material toon texture index is out of range", ReferenceObjectKind::material, materialIndex);
+                            "material toon texture index is out of range", ReferenceObjectKind::material,
+                            materialIndex);
         else
             addError(result, material.toonMode == 1 && material.toonTextureIndex >= 0 && material.toonTextureIndex <= 9,
                      "shared toon index is invalid");
@@ -229,8 +230,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
             addIndexedError(result, inRange(bone.tailBone, model.bones.size()), "bone tail index is out of range",
                             ReferenceObjectKind::bone, boneIndex);
         if ((bone.flags & 0x0300U) != 0)
-            addIndexedError(result, inRange(bone.inheritParent, model.bones.size()), "bone inherit index is out of range",
-                            ReferenceObjectKind::bone, boneIndex);
+            addIndexedError(result, inRange(bone.inheritParent, model.bones.size()),
+                            "bone inherit index is out of range", ReferenceObjectKind::bone, boneIndex);
         if ((bone.flags & 0x0020U) != 0) {
             addIndexedError(result, inRange(bone.ikTarget, model.bones.size()), "IK target index is out of range",
                             ReferenceObjectKind::bone, boneIndex);
@@ -275,7 +276,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
                                : morph.type == 8                                       ? model.materials.size()
                                : morph.type == 10                                      ? model.rigidBodies.size()
                                                                                        : model.morphs.size();
-            addIndexedError(result, inRange(offset.index, count, morph.type != 1 && !(morph.type >= 3 && morph.type <= 7)),
+            addIndexedError(result,
+                            inRange(offset.index, count, morph.type != 1 && !(morph.type >= 3 && morph.type <= 7)),
                             "morph reference index is out of range", ReferenceObjectKind::morph, morphIndex);
         }
     }

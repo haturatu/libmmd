@@ -796,8 +796,7 @@ MotionCompatibility MmdAnimator::motionCompatibility() const {
     return result;
 }
 
-AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning,
-                                          MorphOverrides overrides) {
+AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides) {
 #if !LIBMMD_ENABLE_PHYSICS
     static_cast<void>(deltaSeconds);
 #endif
@@ -946,22 +945,20 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     auto &poses = impl_->poses;
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
     for (const auto &override : overrides) {
-        if (override.index != MorphOverride::temporary ||
-            (override.type != 1U && override.type != 2U))
+        if (override.index != MorphOverride::temporary || (override.type != 1U && override.type != 2U))
             continue;
         for (const auto &offset : override.offsets) {
             if (offset.index < 0)
                 continue;
             if (override.type == 1U) {
                 if (static_cast<std::size_t>(offset.index) < result.vertices.size())
-                    result.vertices[static_cast<std::size_t>(offset.index)].position = add(
-                        result.vertices[static_cast<std::size_t>(offset.index)].position,
-                        mul(offset.vector3, override.weight));
+                    result.vertices[static_cast<std::size_t>(offset.index)].position =
+                        add(result.vertices[static_cast<std::size_t>(offset.index)].position,
+                            mul(offset.vector3, override.weight));
             } else if (static_cast<std::size_t>(offset.index) < local.size()) {
                 const auto bone = static_cast<std::size_t>(offset.index);
                 local[bone].translation = add(local[bone].translation, mul(offset.vector3, override.weight));
-                local[bone].rotation =
-                    multiply(local[bone].rotation, slerp(identity, offset.vector4, override.weight));
+                local[bone].rotation = multiply(local[bone].rotation, slerp(identity, offset.vector4, override.weight));
             }
         }
     }

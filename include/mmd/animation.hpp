@@ -3,8 +3,8 @@
 #include <mmd/pmx.hpp>
 #include <mmd/vmd.hpp>
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <span>
@@ -84,9 +84,8 @@ class MmdAnimator {
     void setPhysics(MmdPhysics *physics);
     void setIkEnabled(bool enabled) noexcept;
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
-    [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F,
-                                               bool gpuSkinning = false,
-                                               MorphOverrides overrides = {});
+    [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false,
+                                              MorphOverrides overrides = {});
 
   private:
     struct Impl;
