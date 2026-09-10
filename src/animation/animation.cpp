@@ -358,10 +358,13 @@ void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local
             pending.push_back(index);
     const auto calculate = [&](std::size_t index) {
         const auto parent = model.bones[index].parent;
-        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() && state[static_cast<std::size_t>(parent)] == 2) {
+        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() &&
+            state[static_cast<std::size_t>(parent)] == 2) {
             const auto parentIndex = static_cast<std::size_t>(parent);
             const auto bindOffset = sub(model.bones[index].position, model.bones[parentIndex].position);
-            global[index].position = add(global[parentIndex].position, rotate(global[parentIndex].rotation, add(bindOffset, local[index].translation)));
+            global[index].position =
+                add(global[parentIndex].position,
+                    rotate(global[parentIndex].rotation, add(bindOffset, local[index].translation)));
             global[index].rotation = multiply(global[parentIndex].rotation, local[index].rotation);
         } else {
             global[index] = {add(model.bones[index].position, local[index].translation), local[index].rotation};
@@ -369,7 +372,8 @@ void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local
         state[index] = 2;
     };
     while (!pending.empty()) {
-        const auto index = pending.back(); pending.pop_back();
+        const auto index = pending.back();
+        pending.pop_back();
         calculate(index);
         for (const auto child : children[index])
             if (--indegree[child] == 0)
@@ -708,6 +712,45 @@ bool skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
 }
 
 } // namespace
+
+MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const float> rootWeights,
+                                        MorphExpansionLimits limits) {
+    MorphExpansionResult result;
+    result.effectiveWeights.resize(model.morphs.size());
+    struct WorkItem {
+        std::size_t index;
+        float weight;
+    };
+    std::vector<WorkItem> pending;
+    for (std::size_t index = 0; index < std::min(model.morphs.size(), rootWeights.size()); ++index)
+        if (std::isfinite(rootWeights[index]) && std::abs(rootWeights[index]) >= 1e-8F)
+            pending.push_back({index, rootWeights[index]});
+    std::uint64_t steps{};
+    while (!pending.empty()) {
+        if (steps++ >= limits.maxSteps) {
+            result.budgetExceeded = true;
+            break;
+        }
+        const auto item = pending.back();
+        pending.pop_back();
+        if (!std::isfinite(item.weight) || std::abs(item.weight) < 1e-8F)
+            continue;
+        const auto &morph = model.morphs[item.index];
+        if (morph.type != 0 && morph.type != 9) {
+            result.effectiveWeights[item.index] += item.weight;
+            continue;
+        }
+        for (const auto &offset : morph.offsets) {
+            if (offset.index < 0 || static_cast<std::size_t>(offset.index) >= model.morphs.size() ||
+                !std::isfinite(offset.scalar)) {
+                result.cycleDetected = result.cycleDetected || offset.index == static_cast<std::int32_t>(item.index);
+                continue;
+            }
+            pending.push_back({static_cast<std::size_t>(offset.index), item.weight * offset.scalar});
+        }
+    }
+    return result;
+}
 
 struct MmdAnimator::Impl {
     BoneOrders boneOrders;
@@ -1191,8 +1234,10 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 }
 
 PreviewNormalization previewNormalization(const PmxModel &model) {
-    Float3 minimum{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()};
-    Float3 maximum{-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()};
+    Float3 minimum{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+                   std::numeric_limits<float>::infinity()};
+    Float3 maximum{-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+                   -std::numeric_limits<float>::infinity()};
     bool found = false;
     for (const auto &vertex : model.vertices) {
         if (!finite(vertex.position))

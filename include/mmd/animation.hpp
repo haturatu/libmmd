@@ -48,6 +48,22 @@ struct PreviewNormalization {
     float scale{1.0F};
 };
 
+struct MorphExpansionLimits {
+    std::uint64_t maxSteps{1'000'000};
+};
+
+struct MorphExpansionResult {
+    std::vector<float> effectiveWeights;
+    bool cycleDetected{};
+    bool budgetExceeded{};
+};
+
+// Expands group and flip morph roots without recursion. Invalid references and
+// non-finite weights are ignored; expansion stops deterministically at the
+// configured work budget.
+[[nodiscard]] MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const float> rootWeights,
+                                                      MorphExpansionLimits limits = {});
+
 struct MotionCompatibility {
     std::size_t pmxBoneCount{};
     std::size_t vmdBoneKeyCount{};
