@@ -887,6 +887,17 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 local[bone].translation = add(local[bone].translation, mul(offset.vector3, weight));
                 local[bone].rotation =
                     multiply(local[bone].rotation, slerp({0.0F, 0.0F, 0.0F, 1.0F}, offset.vector4, weight));
+            } else if (morph.type >= 3 && morph.type <= 7 && offset.index >= 0 &&
+                       static_cast<std::size_t>(offset.index) < result.vertices.size()) {
+                auto &vertex = result.vertices[static_cast<std::size_t>(offset.index)];
+                if (morph.type == 3) {
+                    vertex.uv[0] += offset.vector4[0] * weight;
+                    vertex.uv[1] += offset.vector4[1] * weight;
+                } else {
+                    auto &channel = vertex.additionalUv[static_cast<std::size_t>(morph.type - 4)];
+                    for (std::size_t component = 0; component < channel.size(); ++component)
+                        channel[component] += offset.vector4[component] * weight;
+                }
             } else if (morph.type == 8) {
                 const auto first = offset.index < 0 ? std::size_t{0} : static_cast<std::size_t>(offset.index);
                 const auto last =

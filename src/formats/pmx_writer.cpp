@@ -258,31 +258,35 @@ ValidationResult pmx::validate(const PmxModel &model) {
                     addIndexedError(result, finite(link.minimum) && finite(link.maximum), "IK link limit contains non-finite values", ReferenceObjectKind::bone, boneIndex);
         }
     }
-    std::vector<std::uint8_t> boneVisit(model.bones.size());
-    const auto visitBone = [&](auto &&self, std::size_t index) -> bool {
-        if (boneVisit[index] == 1)
-            return false;
-        if (boneVisit[index] == 2)
-            return true;
-        boneVisit[index] = 1;
-        const auto visitEdge = [&](std::int32_t target) {
-            if (target < 0 || static_cast<std::size_t>(target) >= model.bones.size())
-                return true;
-            return self(self, static_cast<std::size_t>(target));
+    std::vector<std::vector<std::size_t>> dependents(model.bones.size());
+    std::vector<std::size_t> indegree(model.bones.size());
+    for (std::size_t child = 0; child < model.bones.size(); ++child) {
+        const auto addDependency = [&](std::int32_t parent) {
+            if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size()) {
+                dependents[static_cast<std::size_t>(parent)].push_back(child);
+                ++indegree[child];
+            }
         };
-        if (!visitEdge(model.bones[index].parent) ||
-            ((model.bones[index].flags & 0x0300U) != 0 && !visitEdge(model.bones[index].inheritParent)))
-            return false;
-        boneVisit[index] = 2;
-        return true;
-    };
-    for (std::size_t index = 0; index < model.bones.size(); ++index) {
-        if (!visitBone(visitBone, index)) {
-            result.issues.push_back(
-                {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone dependency graph contains a cycle"});
-            break;
-        }
+        addDependency(model.bones[child].parent);
+        if ((model.bones[child].flags & 0x0300U) != 0)
+            addDependency(model.bones[child].inheritParent);
     }
+    std::vector<std::size_t> pending;
+    for (std::size_t index = 0; index < indegree.size(); ++index)
+        if (indegree[index] == 0)
+            pending.push_back(index);
+    std::size_t visited{};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        ++visited;
+        for (const auto child : dependents[index])
+            if (--indegree[child] == 0)
+                pending.push_back(child);
+    }
+    if (visited != model.bones.size())
+        result.issues.push_back(
+            {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone dependency graph contains a cycle"});
     for (std::size_t morphIndex = 0; morphIndex < model.morphs.size(); ++morphIndex) {
         const auto &morph = model.morphs[morphIndex];
         addError(result, morph.type <= 10, "unknown morph type");
