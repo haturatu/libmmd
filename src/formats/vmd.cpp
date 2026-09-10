@@ -80,6 +80,12 @@ std::uint32_t readCount(std::istream &input, std::string_view field, std::uint32
     const auto value = read<std::uint32_t>(input, field);
     if (value > maximum)
         throw std::runtime_error("invalid VMD " + std::string(field));
+    const auto position = input.tellg();
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    input.seekg(position);
+    if (position < 0 || end < position || static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(end - position))
+        throw std::runtime_error("implausible VMD " + std::string(field));
     return value;
 }
 

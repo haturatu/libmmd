@@ -38,6 +38,12 @@ std::int32_t readCount(std::istream &input, std::string_view field, std::int32_t
     const auto count = read<std::int32_t>(input, field);
     if (count < 0 || count > maximum)
         throw std::runtime_error("invalid PMX " + std::string(field));
+    const auto position = input.tellg();
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    input.seekg(position);
+    if (position < 0 || end < position || static_cast<std::uint64_t>(count) > static_cast<std::uint64_t>(end - position))
+        throw std::runtime_error("implausible PMX " + std::string(field));
     return count;
 }
 
@@ -125,7 +131,7 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
     }
     Header result;
     result.metadata.version = read<float>(input, "version");
-    if (result.metadata.version < 2.0F || result.metadata.version > 2.1F) {
+    if (!(result.metadata.version >= 2.0F && result.metadata.version <= 2.1F)) {
         throw std::runtime_error("unsupported PMX version");
     }
     const auto headerSize = read<std::uint8_t>(input, "header size");
