@@ -544,11 +544,11 @@ void MmdPhysics::teleportBody(std::size_t body, const PhysicsTransform &value) {
 }
 
 void MmdPhysics::applyImpulse(std::size_t body, const Float3 &linear, const Float3 &angular, bool local) {
-    if (!finiteVector(linear) || !finiteVector(angular))
-        return;
 #if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
+    if (!finiteVector(linear) || !finiteVector(angular))
+        return;
     auto linearValue = vector(linear);
     auto angularValue = vector(angular);
     if (local) {

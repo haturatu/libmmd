@@ -58,12 +58,6 @@ std::int32_t readCount(std::istream &input, std::string_view field, std::int32_t
     const auto count = read<std::int32_t>(input, field);
     if (count < 0 || count > maximum)
         throw std::runtime_error("invalid PMX " + std::string(field));
-    const auto position = input.tellg();
-    input.seekg(0, std::ios::end);
-    const auto end = input.tellg();
-    input.seekg(position);
-    if (position < 0 || end < position || static_cast<std::uint64_t>(count) > static_cast<std::uint64_t>(end - position))
-        throw std::runtime_error("implausible PMX " + std::string(field));
     return count;
 }
 
@@ -186,8 +180,9 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
 }
 
 void readVertices(std::istream &input, const Header &header, PmxModel &model) {
-    const auto minimumEncodedBytes = 12U + 12U + 8U + static_cast<std::size_t>(header.metadata.additionalUvCount) * 16U +
-                                     1U + static_cast<std::size_t>(header.settings[5]) + 4U;
+    const auto minimumEncodedBytes = 12U + 12U + 8U +
+                                     static_cast<std::size_t>(header.metadata.additionalUvCount) * 16U + 1U +
+                                     static_cast<std::size_t>(header.settings[5]) + 4U;
     checkedResize(model.vertices, static_cast<std::size_t>(header.metadata.vertexCount), input, minimumEncodedBytes,
                   "vertex count");
     const auto boneSize = header.settings[5];
@@ -241,7 +236,7 @@ void readMaterials(std::istream &input, const Header &header, PmxModel &model) {
         model.textures.push_back({readText(input, header.metadata.textEncoding)});
     }
     const auto count = readCount(input, "material count", 1'000'000);
-    model.materials.resize(static_cast<std::size_t>(count));
+    checkedResize(model.materials, static_cast<std::size_t>(count), input, 20, "material count");
     std::uint64_t coveredIndices = 0;
     for (auto &material : model.materials) {
         material.name = readText(input, header.metadata.textEncoding);
@@ -271,7 +266,7 @@ void readMaterials(std::istream &input, const Header &header, PmxModel &model) {
 
 void readBones(std::istream &input, const Header &header, PmxModel &model) {
     const auto count = readCount(input, "bone count", 10'000'000);
-    model.bones.resize(static_cast<std::size_t>(count));
+    checkedResize(model.bones, static_cast<std::size_t>(count), input, 24, "bone count");
     for (auto &bone : model.bones) {
         bone.name = readText(input, header.metadata.textEncoding);
         bone.englishName = readText(input, header.metadata.textEncoding);
@@ -300,7 +295,8 @@ void readBones(std::istream &input, const Header &header, PmxModel &model) {
             bone.ikLoopCount = read<std::int32_t>(input, "IK loop count");
             bone.ikLimitAngle = read<float>(input, "IK angle");
             const auto linkCount = readCount(input, "IK link count", 1'000'000);
-            bone.ikLinks.resize(static_cast<std::size_t>(linkCount));
+            checkedResize(bone.ikLinks, static_cast<std::size_t>(linkCount), input,
+                          static_cast<std::size_t>(header.settings[5]) + 1U, "IK link count");
             for (auto &link : bone.ikLinks) {
                 link.bone = readSignedIndex(input, header.settings[5], "IK link bone");
                 link.limited = read<std::uint8_t>(input, "IK link limit") != 0;
@@ -315,7 +311,7 @@ void readBones(std::istream &input, const Header &header, PmxModel &model) {
 
 void readMorphs(std::istream &input, const Header &header, PmxModel &model) {
     const auto count = readCount(input, "morph count", 10'000'000);
-    model.morphs.resize(static_cast<std::size_t>(count));
+    checkedResize(model.morphs, static_cast<std::size_t>(count), input, 10, "morph count");
     for (auto &morph : model.morphs) {
         morph.name = readText(input, header.metadata.textEncoding);
         morph.englishName = readText(input, header.metadata.textEncoding);
@@ -325,7 +321,7 @@ void readMorphs(std::istream &input, const Header &header, PmxModel &model) {
             throw std::runtime_error("invalid PMX morph type");
         }
         const auto offsetCount = readCount(input, "morph offset count", 100'000'000);
-        morph.offsets.resize(static_cast<std::size_t>(offsetCount));
+        checkedResize(morph.offsets, static_cast<std::size_t>(offsetCount), input, 5, "morph offset count");
         for (auto &offset : morph.offsets) {
             if (morph.type == 0 || morph.type == 9) {
                 offset.index = readSignedIndex(input, header.settings[6], "group morph index");
@@ -365,13 +361,13 @@ void readMorphs(std::istream &input, const Header &header, PmxModel &model) {
 
 void readDisplayFrames(std::istream &input, const Header &header, PmxModel &model) {
     const auto count = readCount(input, "display frame count", 1'000'000);
-    model.displayFrames.resize(static_cast<std::size_t>(count));
+    checkedResize(model.displayFrames, static_cast<std::size_t>(count), input, 10, "display frame count");
     for (auto &frame : model.displayFrames) {
         frame.name = readText(input, header.metadata.textEncoding);
         frame.englishName = readText(input, header.metadata.textEncoding);
         frame.special = read<std::uint8_t>(input, "display frame special") != 0;
         const auto itemCount = readCount(input, "display item count", 10'000'000);
-        frame.items.resize(static_cast<std::size_t>(itemCount));
+        checkedResize(frame.items, static_cast<std::size_t>(itemCount), input, 2, "display item count");
         for (auto &item : frame.items) {
             item.bone = read<std::uint8_t>(input, "display item type") == 0;
             item.index =
@@ -382,7 +378,7 @@ void readDisplayFrames(std::istream &input, const Header &header, PmxModel &mode
 
 void readPhysics(std::istream &input, const Header &header, PmxModel &model) {
     const auto bodyCount = readCount(input, "rigid body count", 1'000'000);
-    model.rigidBodies.resize(static_cast<std::size_t>(bodyCount));
+    checkedResize(model.rigidBodies, static_cast<std::size_t>(bodyCount), input, 40, "rigid body count");
     for (std::size_t bodyIndex = 0; bodyIndex < model.rigidBodies.size(); ++bodyIndex) {
         auto &body = model.rigidBodies[bodyIndex];
         body.name = readText(input, header.metadata.textEncoding);
@@ -437,7 +433,7 @@ void readPhysics(std::istream &input, const Header &header, PmxModel &model) {
                       (body.physicsEnabled ? "enabled" : "disabled"));
     }
     const auto jointCount = readCount(input, "joint count", 1'000'000);
-    model.joints.resize(static_cast<std::size_t>(jointCount));
+    checkedResize(model.joints, static_cast<std::size_t>(jointCount), input, 50, "joint count");
     for (std::size_t jointIndex = 0; jointIndex < model.joints.size(); ++jointIndex) {
         auto &joint = model.joints[jointIndex];
         joint.name = readText(input, header.metadata.textEncoding);
@@ -470,7 +466,7 @@ void readSoftBodies(std::istream &input, const Header &header, PmxModel &model) 
     if (header.metadata.version < 2.1F || input.peek() == std::char_traits<char>::eof())
         return;
     const auto count = readCount(input, "soft body count", 1'000'000);
-    model.softBodies.resize(static_cast<std::size_t>(count));
+    checkedResize(model.softBodies, static_cast<std::size_t>(count), input, 50, "soft body count");
     for (auto &body : model.softBodies) {
         body.name = readText(input, header.metadata.textEncoding);
         body.englishName = readText(input, header.metadata.textEncoding);
@@ -490,14 +486,15 @@ void readSoftBodies(std::istream &input, const Header &header, PmxModel &model) 
             value = read<std::int32_t>(input, "soft body iteration");
         body.materialConfig = readFloatArray<3>(input, "soft body material config");
         const auto anchorCount = readCount(input, "soft body anchor count", 10'000'000);
-        body.anchors.resize(static_cast<std::size_t>(anchorCount));
+        checkedResize(body.anchors, static_cast<std::size_t>(anchorCount), input, 6, "soft body anchor count");
         for (auto &anchor : body.anchors) {
             anchor.rigidBody = readSignedIndex(input, header.settings[7], "soft body anchor rigid body");
             anchor.vertex = static_cast<std::int32_t>(readVertexIndex(input, header.settings[2]));
             anchor.nearMode = read<std::uint8_t>(input, "soft body anchor near mode") != 0;
         }
         const auto pinCount = readCount(input, "soft body pin count", 100'000'000);
-        body.pinnedVertices.resize(static_cast<std::size_t>(pinCount));
+        checkedResize(body.pinnedVertices, static_cast<std::size_t>(pinCount), input, header.settings[2],
+                      "soft body pin count");
         for (auto &vertex : body.pinnedVertices)
             vertex = static_cast<std::int32_t>(readVertexIndex(input, header.settings[2]));
     }
@@ -521,7 +518,7 @@ PmxModel pmx::load(const std::filesystem::path &path) {
     const auto indexCount = readCount(input, "index count");
     if (indexCount % 3 != 0)
         throw std::runtime_error("PMX index count is not divisible by three");
-    model.indices.resize(static_cast<std::size_t>(indexCount));
+    checkedResize(model.indices, static_cast<std::size_t>(indexCount), input, header.settings[2], "index count");
     for (auto &index : model.indices) {
         index = readVertexIndex(input, header.settings[2]);
         if (index >= model.vertices.size())
