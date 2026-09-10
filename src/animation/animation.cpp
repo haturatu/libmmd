@@ -529,9 +529,16 @@ std::size_t rebuildDirtyBonePoses(const PmxModel &model, const BoneOrder &order,
         if (bone.inheritParent >= 0 && static_cast<std::size_t>(bone.inheritParent) < poses.size() &&
             std::isfinite(bone.inheritRatio)) {
             const auto parent = static_cast<std::size_t>(bone.inheritParent);
-            LocalPose appendSource = (bone.flags & 0x0080U) != 0 ? poses[parent].local : poses[parent].base;
-            if ((bone.flags & 0x0080U) == 0)
+            LocalPose appendSource;
+            if ((bone.flags & 0x0080U) != 0) {
+                appendSource = poses[parent].local;
+            } else if ((model.bones[parent].flags & 0x0300U) != 0) {
+                appendSource = poses[parent].append;
                 appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+            } else {
+                appendSource = poses[parent].base;
+                appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+            }
             if ((bone.flags & 0x0200U) != 0) {
                 pose.append.translation = mul(appendSource.translation, bone.inheritRatio);
                 pose.local.translation = add(pose.local.translation, pose.append.translation);
