@@ -82,6 +82,34 @@ int main() {
     assert(mmd::pmx::chooseIndexWidths(formatted).bone == 2);
     assert(mmd::pmx::chooseIndexWidths(formatted, {.indexWidths = mmd::PmxIndexWidthPolicy::minimal}).bone == 1);
 
+    // PMX 2.1 anchor records contain a rigid-body index, a vertex index, and
+    // one mode byte.  Each index has its own independently selected width.
+    // Exercise the narrow and wide combinations so the reader's count
+    // plausibility check remains tied to the actual encoded record size.
+    const auto anchorPath = std::filesystem::temp_directory_path() / "libmmd-pmx-soft-body-anchor-widths.pmx";
+    const auto checkSoftBodyAnchorWidths = [&](std::uint8_t vertexWidth, std::uint8_t rigidBodyWidth) {
+        auto softBodyModel = model;
+        softBodyModel.metadata.version = 2.1F;
+        softBodyModel.format.vertexIndexSize = vertexWidth;
+        softBodyModel.format.rigidBodyIndexSize = rigidBodyWidth;
+        softBodyModel.rigidBodies = {{.name = "rigid", .bone = 0}};
+        softBodyModel.softBodies = {{.name = "soft",
+                                     .material = 0,
+                                     .anchors = {{.rigidBody = 0, .vertex = 0, .nearMode = true}},
+                                     .pinnedVertices = {0}}};
+        const auto report = mmd::pmx::save(anchorPath, softBodyModel);
+        assert(!report.vertex.widened());
+        assert(!report.rigidBody.widened());
+        const auto reloadedSoftBody = mmd::pmx::load(anchorPath);
+        assert(reloadedSoftBody.format.vertexIndexSize == vertexWidth);
+        assert(reloadedSoftBody.format.rigidBodyIndexSize == rigidBodyWidth);
+        assert(reloadedSoftBody.softBodies[0].anchors == softBodyModel.softBodies[0].anchors);
+    };
+    checkSoftBodyAnchorWidths(1, 1);
+    checkSoftBodyAnchorWidths(1, 2);
+    checkSoftBodyAnchorWidths(2, 2);
+    checkSoftBodyAnchorWidths(4, 4);
+
     auto semanticallyEquivalent = model;
     semanticallyEquivalent.format.boneIndexSize = 1;
     semanticallyEquivalent.sourcePath = "other.pmx";
