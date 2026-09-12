@@ -875,7 +875,8 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
     while (!groupQueue.empty() && !result.budgetExceeded) {
         const auto parent = groupQueue.back();
         groupQueue.pop_back();
-        if (!propagate(parent, true))
+        const auto weight = propagated[parent];
+        if (std::isfinite(weight) && std::abs(weight) >= 1e-8F && !propagate(parent, true))
             break;
         for (const auto child : dependents[parent])
             if (!cyclic[child] && --indegree[child] == 0)
