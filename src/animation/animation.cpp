@@ -797,6 +797,10 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
                                         MorphExpansionLimits limits) {
     MorphExpansionResult result;
     result.effectiveWeights.resize(model.morphs.size());
+    std::vector<float> propagated(model.morphs.size());
+    for (std::size_t index = 0; index < std::min(model.morphs.size(), rootWeights.size()); ++index)
+        if (std::isfinite(rootWeights[index]))
+            propagated[index] = rootWeights[index];
     std::vector<std::size_t> indegree(model.morphs.size());
     std::vector<std::vector<std::size_t>> dependents(model.morphs.size());
     std::size_t groupCount{};
@@ -827,37 +831,59 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
                 groupQueue.push_back(child);
     }
     result.cycleDetected = visitedGroups != groupCount;
-    struct WorkItem {
-        std::size_t index;
-        float weight;
-    };
-    std::vector<WorkItem> pending;
-    for (std::size_t index = 0; index < std::min(model.morphs.size(), rootWeights.size()); ++index)
-        if (std::isfinite(rootWeights[index]) && std::abs(rootWeights[index]) >= 1e-8F)
-            pending.push_back({index, rootWeights[index]});
+    std::vector<bool> cyclic(model.morphs.size());
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        cyclic[index] = (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] != 0;
+
+    // A cyclic group is evaluated once for its direct leaf offsets.  Group
+    // edges from or into that component are ignored, so malformed data cannot
+    // re-enter the component or consume the expansion budget every frame.
     std::uint64_t steps{};
-    while (!pending.empty()) {
-        if (steps++ >= limits.maxSteps) {
-            result.budgetExceeded = true;
-            break;
-        }
-        const auto item = pending.back();
-        pending.pop_back();
-        if (!std::isfinite(item.weight) || std::abs(item.weight) < 1e-8F)
-            continue;
-        const auto &morph = model.morphs[item.index];
-        if (morph.type != 0 && morph.type != 9) {
-            result.effectiveWeights[item.index] += item.weight;
-            continue;
-        }
-        for (const auto &offset : morph.offsets) {
-            if (offset.index < 0 || static_cast<std::size_t>(offset.index) >= model.morphs.size() ||
-                !std::isfinite(offset.scalar)) {
-                continue;
+    const auto propagate = [&](std::size_t parent, bool allowGroupChildren) {
+        for (const auto &offset : model.morphs[parent].offsets) {
+            if (steps++ >= limits.maxSteps) {
+                result.budgetExceeded = true;
+                return false;
             }
-            pending.push_back({static_cast<std::size_t>(offset.index), item.weight * offset.scalar});
+            if (offset.index < 0 || static_cast<std::size_t>(offset.index) >= model.morphs.size() ||
+                !std::isfinite(offset.scalar))
+                continue;
+            const auto child = static_cast<std::size_t>(offset.index);
+            const bool childGroup = model.morphs[child].type == 0 || model.morphs[child].type == 9;
+            if (childGroup && (!allowGroupChildren || cyclic[child]))
+                continue;
+            propagated[child] += propagated[parent] * offset.scalar;
         }
+        return true;
+    };
+    for (std::size_t index = 0; index < model.morphs.size() && !result.budgetExceeded; ++index)
+        if (cyclic[index] && std::isfinite(propagated[index]) && std::abs(propagated[index]) >= 1e-8F)
+            static_cast<void>(propagate(index, false));
+
+    std::fill(indegree.begin(), indegree.end(), 0U);
+    for (std::size_t parent = 0; parent < model.morphs.size(); ++parent) {
+        if (cyclic[parent] || (model.morphs[parent].type != 0 && model.morphs[parent].type != 9))
+            continue;
+        for (const auto child : dependents[parent])
+            if (!cyclic[child])
+                ++indegree[child];
     }
+    groupQueue.clear();
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        if (!cyclic[index] && (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] == 0)
+            groupQueue.push_back(index);
+    while (!groupQueue.empty() && !result.budgetExceeded) {
+        const auto parent = groupQueue.back();
+        groupQueue.pop_back();
+        if (!propagate(parent, true))
+            break;
+        for (const auto child : dependents[parent])
+            if (!cyclic[child] && --indegree[child] == 0)
+                groupQueue.push_back(child);
+    }
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        if (model.morphs[index].type != 0 && model.morphs[index].type != 9 && std::isfinite(propagated[index]))
+            result.effectiveWeights[index] = propagated[index];
     return result;
 }
 
@@ -1055,8 +1081,6 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         if (override.index < morphWeights.size())
             morphWeights[override.index] = std::clamp(override.weight, 0.0F, 1.0F);
     }
-    std::vector<std::pair<std::size_t, float>> morphWork;
-    constexpr std::uint64_t maxMorphExpansionSteps = 1'000'000;
     const auto applyMorph = [&](std::size_t index, float weight) {
         if (index >= model_.morphs.size() || !std::isfinite(weight) || std::abs(weight) < 1e-8F)
             return;
@@ -1066,11 +1090,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             return;
         }
         for (const auto &offset : morph.offsets) {
-            if (morph.type == 0 || morph.type == 9) {
-                if (offset.index >= 0 && std::isfinite(offset.scalar))
-                    morphWork.push_back({static_cast<std::size_t>(offset.index), weight * offset.scalar});
-            } else if (morph.type == 1 && offset.index >= 0 &&
-                       static_cast<std::size_t>(offset.index) < result.vertices.size()) {
+            if (morph.type == 1 && offset.index >= 0 &&
+                static_cast<std::size_t>(offset.index) < result.vertices.size()) {
                 result.vertices[static_cast<std::size_t>(offset.index)].position =
                     add(result.vertices[static_cast<std::size_t>(offset.index)].position, mul(offset.vector3, weight));
             } else if (morph.type == 2 && offset.index >= 0 && static_cast<std::size_t>(offset.index) < local.size()) {
@@ -1148,14 +1169,9 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             }
         }
     };
-    for (std::size_t i = 0; i < morphWeights.size(); ++i)
-        morphWork.push_back({i, morphWeights[i]});
-    std::uint64_t morphSteps{};
-    while (!morphWork.empty() && morphSteps++ < maxMorphExpansionSteps) {
-        const auto [index, weight] = morphWork.back();
-        morphWork.pop_back();
-        applyMorph(index, weight);
-    }
+    const auto expansion = expandMorphWeights(model_, morphWeights);
+    for (std::size_t index = 0; index < expansion.effectiveWeights.size(); ++index)
+        applyMorph(index, expansion.effectiveWeights[index]);
 
     auto &poses = impl_->poses;
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
@@ -1387,10 +1403,12 @@ PreviewNormalization previewNormalization(const PmxModel &model) {
     if (!found)
         return {};
     PreviewNormalization result;
-    result.center = {(minimum[0] + maximum[0]) * 0.5F, (minimum[1] + maximum[1]) * 0.5F,
-                     (minimum[2] + maximum[2]) * 0.5F};
-    const auto extent = std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 0.001F});
-    result.scale = std::isfinite(extent) && extent > 0.0F ? 1.8F / extent : 1.0F;
+    result.center = {std::midpoint(minimum[0], maximum[0]), std::midpoint(minimum[1], maximum[1]),
+                     std::midpoint(minimum[2], maximum[2])};
+    const auto extent = std::max({static_cast<double>(maximum[0]) - static_cast<double>(minimum[0]),
+                                  static_cast<double>(maximum[1]) - static_cast<double>(minimum[1]),
+                                  static_cast<double>(maximum[2]) - static_cast<double>(minimum[2]), 0.001});
+    result.scale = std::isfinite(extent) && extent > 0.0 ? static_cast<float>(1.8 / extent) : 1.0F;
     return result;
 }
 

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -515,7 +516,10 @@ void readSoftBodies(std::istream &input, const Header &header, PmxModel &model) 
             value = read<std::int32_t>(input, "soft body iteration");
         body.materialConfig = readFloatArray<3>(input, "soft body material config");
         const auto anchorCount = readCount(input, "soft body anchor count", 10'000'000);
-        checkedResize(body.anchors, static_cast<std::size_t>(anchorCount), input, 6, "soft body anchor count");
+        const auto anchorEncodedBytes =
+            static_cast<std::size_t>(header.settings[7]) + static_cast<std::size_t>(header.settings[2]) + 1U;
+        checkedResize(body.anchors, static_cast<std::size_t>(anchorCount), input, anchorEncodedBytes,
+                      "soft body anchor count");
         for (auto &anchor : body.anchors) {
             anchor.rigidBody = readSignedIndex(input, header.settings[7], "soft body anchor rigid body");
             anchor.vertex = static_cast<std::int32_t>(readVertexIndex(input, header.settings[2]));
@@ -586,10 +590,12 @@ PmxMesh pmx::loadMesh(const std::filesystem::path &path) {
     }
     if (!found)
         return mesh;
-    const Float3 center{(minimum[0] + maximum[0]) * 0.5F, (minimum[1] + maximum[1]) * 0.5F,
-                        (minimum[2] + maximum[2]) * 0.5F};
-    const auto extent = std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 0.001F});
-    const float scale = std::isfinite(extent) && extent > 0.0F ? 1.8F / extent : 1.0F;
+    const Float3 center{std::midpoint(minimum[0], maximum[0]), std::midpoint(minimum[1], maximum[1]),
+                        std::midpoint(minimum[2], maximum[2])};
+    const auto extent = std::max({static_cast<double>(maximum[0]) - static_cast<double>(minimum[0]),
+                                  static_cast<double>(maximum[1]) - static_cast<double>(minimum[1]),
+                                  static_cast<double>(maximum[2]) - static_cast<double>(minimum[2]), 0.001});
+    const float scale = std::isfinite(extent) && extent > 0.0 ? static_cast<float>(1.8 / extent) : 1.0F;
     for (auto &vertex : mesh.vertices) {
         for (std::size_t axis = 0; axis < 3; ++axis)
             vertex.position[axis] = (vertex.position[axis] - center[axis]) * scale;
