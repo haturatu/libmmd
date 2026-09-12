@@ -1170,6 +1170,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         }
     };
     const auto expansion = expandMorphWeights(model_, morphWeights);
+    if (expansion.budgetExceeded)
+        log::warn("Morph expansion budget exceeded");
     for (std::size_t index = 0; index < expansion.effectiveWeights.size(); ++index)
         applyMorph(index, expansion.effectiveWeights[index]);
 
