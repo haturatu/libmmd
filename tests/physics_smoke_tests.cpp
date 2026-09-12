@@ -1,3 +1,4 @@
+#include <mmd/animation.hpp>
 #include <mmd/physics.hpp>
 
 #include <cassert>
@@ -46,6 +47,57 @@ int main() {
     }
     if (after.position[1] >= before.position[1]) {
         std::printf("FAIL: body did not fall under gravity\n");
+        return 1;
+    }
+
+    mmd::PmxModel syncModel;
+    syncModel.bones.push_back({.name = "animated"});
+
+    mmd::PmxRigidBody animatedBody;
+    animatedBody.name = "animated body";
+    animatedBody.bone = 0;
+    animatedBody.group = 0;
+    animatedBody.collisionMask = 0;
+    animatedBody.shape = 0;
+    animatedBody.size = {0.5F, 0.0F, 0.0F};
+    animatedBody.position = {0.0F, 0.0F, 0.0F};
+    animatedBody.mass = 1.0F;
+    animatedBody.mode = 2;
+    syncModel.rigidBodies.push_back(animatedBody);
+
+    mmd::PmxRigidBody unboundBody = body;
+    unboundBody.name = "unbound body";
+    unboundBody.bone = -1;
+    unboundBody.position = {0.0F, 10.0F, 0.0F};
+    syncModel.rigidBodies.push_back(unboundBody);
+
+    mmd::VmdMotion motion;
+    motion.bones.push_back({.name = "animated", .frame = 0, .translation = {1.0F, 0.0F, 0.0F}});
+    mmd::MmdPhysics syncPhysics(syncModel);
+    mmd::MmdAnimator animator(syncModel);
+    animator.setMotion(&motion);
+    animator.setPhysics(&syncPhysics);
+    static_cast<void>(animator.evaluate(0.0F, 0.0F));
+    if (std::abs(syncPhysics.bodyTransform(0).position[0] - 1.0F) > 1e-4F) {
+        std::printf("FAIL: first animated pose did not synchronize the bound body\n");
+        return 1;
+    }
+
+    const auto unboundInitial = syncPhysics.bodyTransform(1);
+    static_cast<void>(animator.evaluate(0.0F, 1.0F / 30.0F));
+    const auto unboundAdvanced = syncPhysics.bodyTransform(1);
+    if (unboundAdvanced.position[1] >= unboundInitial.position[1]) {
+        std::printf("FAIL: unbound body did not advance before pose replacement\n");
+        return 1;
+    }
+
+    mmd::VpdPose pose;
+    pose.bones.push_back({.name = "animated", .translation = {2.0F, 0.0F, 0.0F}});
+    animator.setPose(&pose);
+    static_cast<void>(animator.evaluate(0.0F, 0.0F));
+    const auto unboundReset = syncPhysics.bodyTransform(1);
+    if (std::abs(unboundReset.position[1] - unboundInitial.position[1]) > 1e-4F) {
+        std::printf("FAIL: pose replacement did not reset unbound physics state\n");
         return 1;
     }
 #else

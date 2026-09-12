@@ -171,7 +171,10 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
     add_test(NAME animation_hardening COMMAND libmmd_animation_hardening_tests)
     if(LIBMMD_ENABLE_PHYSICS)
         add_executable(libmmd_physics_smoke_tests tests/physics_smoke_tests.cpp)
-        target_link_libraries(libmmd_physics_smoke_tests PRIVATE mmd::physics)
+        target_link_libraries(
+            libmmd_physics_smoke_tests
+            PRIVATE mmd::animation mmd::physics
+        )
         add_test(NAME physics_smoke COMMAND libmmd_physics_smoke_tests)
     endif()
 
