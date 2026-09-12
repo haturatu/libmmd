@@ -84,7 +84,7 @@ int main() {
     }
 
     const auto unboundInitial = syncPhysics.bodyTransform(1);
-    static_cast<void>(animator.evaluate(1.0F, 1.0F / 30.0F));
+    static_cast<void>(animator.evaluate(0.0F, 1.0F / 30.0F));
     const auto unboundAdvanced = syncPhysics.bodyTransform(1);
     if (unboundAdvanced.position[1] >= unboundInitial.position[1]) {
         std::printf("FAIL: unbound body did not advance before pose replacement\n");
@@ -94,7 +94,7 @@ int main() {
     mmd::VpdPose pose;
     pose.bones.push_back({.name = "animated", .translation = {2.0F, 0.0F, 0.0F}});
     animator.setPose(&pose);
-    static_cast<void>(animator.evaluate(1.0F, 0.0F));
+    static_cast<void>(animator.evaluate(0.0F, 0.0F));
     const auto unboundReset = syncPhysics.bodyTransform(1);
     if (std::abs(unboundReset.position[1] - unboundInitial.position[1]) > 1e-4F) {
         std::printf("FAIL: pose replacement did not reset unbound physics state\n");
