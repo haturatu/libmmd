@@ -12,12 +12,17 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace mmd {
 namespace {
 
 constexpr std::int32_t maxElements = 300'000'000;
+#ifdef LIBMMD_TEST_MAX_DECODED_BYTES
+constexpr std::size_t maxDecodedBytes = LIBMMD_TEST_MAX_DECODED_BYTES;
+#else
 constexpr std::size_t maxDecodedBytes = 512U * 1024U * 1024U;
+#endif
 
 std::size_t remainingBytes(std::istream &input) {
     const auto position = input.tellg();
@@ -33,6 +38,16 @@ struct DecodedBudget {
     std::size_t remaining{maxDecodedBytes};
 };
 thread_local DecodedBudget *activeBudget{};
+
+void accountBytes(DecodedBudget &budget, std::size_t bytes, std::string_view field) {
+    if (bytes > budget.remaining)
+        throw std::runtime_error("PMX decoded allocation budget exceeded for " + std::string(field));
+    budget.remaining -= bytes;
+}
+
+void releaseTemporaryBytes(DecodedBudget &budget, std::size_t bytes) {
+    budget.remaining += bytes;
+}
 
 class ScopedDecodedBudget final {
   public:
@@ -55,7 +70,7 @@ void checkedResize(std::vector<T> &destination, std::size_t count, std::istream 
     if (minimumEncodedBytes == 0 || count > remainingBytes(input) / minimumEncodedBytes ||
         count > budget.remaining / sizeof(T))
         throw std::runtime_error("implausible PMX " + std::string(field));
-    budget.remaining -= count * sizeof(T);
+    accountBytes(budget, count * sizeof(T), field);
     destination.resize(count);
 }
 
@@ -91,9 +106,9 @@ std::int32_t readCount(std::istream &input, std::string_view field, std::int32_t
     return count;
 }
 
-std::string utf16LeToUtf8(std::string_view bytes) {
+std::string utf16LeToUtf8(std::string_view bytes, std::size_t reserveBytes) {
     std::string output;
-    output.reserve(bytes.size());
+    output.reserve(reserveBytes);
     for (std::size_t i = 0; i + 1 < bytes.size(); i += 2) {
         const auto lo = static_cast<unsigned char>(bytes[i]);
         const auto hi = static_cast<unsigned char>(bytes[i + 1]);
@@ -127,12 +142,26 @@ std::string utf16LeToUtf8(std::string_view bytes) {
 }
 
 std::string readText(std::istream &input, std::uint8_t encoding) {
+    if (activeBudget == nullptr)
+        throw std::runtime_error("missing PMX decoded allocation budget");
+    auto &budget = *activeBudget;
     const auto size = readCount(input, "text length", 16 * 1024 * 1024);
-    std::string bytes(static_cast<std::size_t>(size), '\0');
+    const auto byteSize = static_cast<std::size_t>(size);
+    if (byteSize > remainingBytes(input))
+        throw std::runtime_error("truncated PMX text");
+    accountBytes(budget, byteSize, "text bytes");
+    std::string bytes(byteSize, '\0');
     input.read(bytes.data(), size);
     if (!input)
         throw std::runtime_error("truncated PMX text");
-    return encoding == 0 ? utf16LeToUtf8(bytes) : bytes;
+    if (encoding != 0)
+        return bytes;
+
+    const auto maxUtf8Bytes = (bytes.size() / 2U) * 3U;
+    accountBytes(budget, maxUtf8Bytes, "UTF-8 text bytes");
+    auto output = utf16LeToUtf8(bytes, maxUtf8Bytes);
+    releaseTemporaryBytes(budget, bytes.size());
+    return output;
 }
 
 std::int32_t readSignedIndex(std::istream &input, std::uint8_t size, std::string_view field) {
@@ -261,10 +290,9 @@ void readVertices(std::istream &input, const Header &header, PmxModel &model, De
 
 void readMaterials(std::istream &input, const Header &header, PmxModel &model, DecodedBudget &budget) {
     const auto textureCount = readCount(input, "texture count", 1'000'000);
-    model.textures.reserve(static_cast<std::size_t>(textureCount));
-    for (std::int32_t i = 0; i < textureCount; ++i) {
-        model.textures.push_back({readText(input, header.metadata.textEncoding)});
-    }
+    checkedResize(model.textures, static_cast<std::size_t>(textureCount), input, 4, "texture count", budget);
+    for (auto &texture : model.textures)
+        texture.storedPath = readText(input, header.metadata.textEncoding);
     const auto count = readCount(input, "material count", 1'000'000);
     checkedResize(model.materials, static_cast<std::size_t>(count), input, 20, "material count", budget);
     std::uint64_t coveredIndices = 0;
@@ -537,16 +565,18 @@ void readSoftBodies(std::istream &input, const Header &header, PmxModel &model) 
 
 PmxMetadata pmx::probe(const std::filesystem::path &path) {
     MappedFileStream input(path);
+    DecodedBudget budget;
+    const ScopedDecodedBudget scopedBudget(budget);
     return readHeader(input, path).metadata;
 }
 
 PmxModel pmx::load(const std::filesystem::path &path) {
     MappedFileStream input(path);
-    const auto header = readHeader(input, path);
-    PmxModel model;
     DecodedBudget budget;
     const ScopedDecodedBudget scopedBudget(budget);
-    model.metadata = header.metadata;
+    auto header = readHeader(input, path);
+    PmxModel model;
+    model.metadata = std::move(header.metadata);
     model.format = header.format;
     model.sourcePath = path;
     readVertices(input, header, model, budget);
