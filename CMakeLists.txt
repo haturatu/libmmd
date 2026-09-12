@@ -161,6 +161,21 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
     target_link_libraries(libmmd_pmx_roundtrip_tests PRIVATE mmd::core)
     add_test(NAME pmx_roundtrip COMMAND libmmd_pmx_roundtrip_tests)
     add_executable(
+        libmmd_parser_hardening_tests
+        tests/parser_hardening_tests.cpp
+        src/formats/pmx_reader.cpp
+        src/internal/mapped_file.cpp
+    )
+    target_include_directories(
+        libmmd_parser_hardening_tests
+        PRIVATE include src/internal
+    )
+    target_compile_definitions(
+        libmmd_parser_hardening_tests
+        PRIVATE LIBMMD_TEST_MAX_DECODED_BYTES=65536
+    )
+    add_test(NAME parser_hardening COMMAND libmmd_parser_hardening_tests)
+    add_executable(
         libmmd_animation_hardening_tests
         tests/animation_hardening_tests.cpp
     )
