@@ -25,6 +25,26 @@
 namespace mmd {
 namespace {
 
+constexpr std::size_t maxDecodedBytes = 512U * 1024U * 1024U;
+
+struct DecodedBudget {
+    std::size_t remaining{maxDecodedBytes};
+
+    template <typename T>
+    void resize(std::vector<T> &destination, std::size_t count, std::istream &input, std::size_t minimumEncodedBytes,
+                std::string_view field) {
+        const auto position = input.tellg();
+        input.seekg(0, std::ios::end);
+        const auto end = input.tellg();
+        input.seekg(position);
+        if (minimumEncodedBytes == 0 || position < 0 || end < position ||
+            count > static_cast<std::size_t>(end - position) / minimumEncodedBytes || count > remaining / sizeof(T))
+            throw std::runtime_error("implausible VMD " + std::string(field));
+        remaining -= count * sizeof(T);
+        destination.resize(count);
+    }
+};
+
 template <typename T> T read(std::istream &input, std::string_view field) {
     static_assert(std::is_trivially_copyable_v<T>);
     T value{};
@@ -55,6 +75,15 @@ template <std::size_t N> std::array<float, N> readFloatArray(std::istream &input
     input.read(reinterpret_cast<char *>(value.data()), static_cast<std::streamsize>(sizeof(value)));
     if (!input)
         throw std::runtime_error("truncated VMD while reading " + std::string(field));
+    if (!std::all_of(value.begin(), value.end(), [](float component) { return std::isfinite(component); }))
+        throw std::runtime_error("non-finite VMD " + std::string(field));
+    return value;
+}
+
+float readFiniteFloat(std::istream &input, std::string_view field) {
+    const auto value = read<float>(input, field);
+    if (!std::isfinite(value))
+        throw std::runtime_error("non-finite VMD " + std::string(field));
     return value;
 }
 
@@ -71,6 +100,13 @@ std::uint32_t readCount(std::istream &input, std::string_view field, std::uint32
     const auto value = read<std::uint32_t>(input, field);
     if (value > maximum)
         throw std::runtime_error("invalid VMD " + std::string(field));
+    const auto position = input.tellg();
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    input.seekg(position);
+    if (position < 0 || end < position ||
+        static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(end - position))
+        throw std::runtime_error("implausible VMD " + std::string(field));
     return value;
 }
 
@@ -281,8 +317,9 @@ VmdMotion loadVmd(const std::filesystem::path &path) {
         throw std::runtime_error("unsupported VMD file: " + path.string());
     }
     VmdMotion motion;
+    DecodedBudget budget;
     motion.modelName = readName<20>(input, "model name");
-    motion.bones.resize(readCount(input, "bone key count"));
+    budget.resize(motion.bones, readCount(input, "bone key count"), input, 111, "bone key count");
     for (auto &key : motion.bones) {
         key.name = readName<15>(input, "bone name");
         key.frame = read<std::uint32_t>(input, "bone frame");
@@ -299,19 +336,19 @@ VmdMotion loadVmd(const std::filesystem::path &path) {
         key.physics = raw[2] != 99 || raw[3] != 15;
         updateLastFrame(motion, key.frame);
     }
-    motion.morphs.resize(readCount(input, "morph key count"));
+    budget.resize(motion.morphs, readCount(input, "morph key count"), input, 23, "morph key count");
     for (auto &key : motion.morphs) {
         key.name = readName<15>(input, "morph name");
         key.frame = read<std::uint32_t>(input, "morph frame");
-        key.weight = read<float>(input, "morph weight");
+        key.weight = readFiniteFloat(input, "morph weight");
         updateLastFrame(motion, key.frame);
     }
     if (input.peek() == std::char_traits<char>::eof())
         return motion;
-    motion.cameras.resize(readCount(input, "camera key count"));
+    budget.resize(motion.cameras, readCount(input, "camera key count"), input, 61, "camera key count");
     for (auto &key : motion.cameras) {
         key.frame = read<std::uint32_t>(input, "camera frame");
-        key.distance = read<float>(input, "camera distance");
+        key.distance = readFiniteFloat(input, "camera distance");
         key.position = readFloatArray<3>(input, "camera position");
         key.rotation = readFloatArray<3>(input, "camera rotation");
         input.read(reinterpret_cast<char *>(key.interpolation.data()),
@@ -324,7 +361,7 @@ VmdMotion loadVmd(const std::filesystem::path &path) {
     }
     if (input.peek() == std::char_traits<char>::eof())
         return motion;
-    motion.lights.resize(readCount(input, "light key count"));
+    budget.resize(motion.lights, readCount(input, "light key count"), input, 28, "light key count");
     for (auto &key : motion.lights) {
         key.frame = read<std::uint32_t>(input, "light frame");
         key.color = readFloatArray<3>(input, "light color");
@@ -333,20 +370,20 @@ VmdMotion loadVmd(const std::filesystem::path &path) {
     }
     if (input.peek() == std::char_traits<char>::eof())
         return motion;
-    motion.shadows.resize(readCount(input, "shadow key count"));
+    budget.resize(motion.shadows, readCount(input, "shadow key count"), input, 9, "shadow key count");
     for (auto &key : motion.shadows) {
         key.frame = read<std::uint32_t>(input, "shadow frame");
         key.mode = read<std::uint8_t>(input, "shadow mode");
-        key.distance = read<float>(input, "shadow distance");
+        key.distance = readFiniteFloat(input, "shadow distance");
         updateLastFrame(motion, key.frame);
     }
     if (input.peek() == std::char_traits<char>::eof())
         return motion;
-    motion.ik.resize(readCount(input, "IK key count"));
+    budget.resize(motion.ik, readCount(input, "IK key count"), input, 9, "IK key count");
     for (auto &key : motion.ik) {
         key.frame = read<std::uint32_t>(input, "IK frame");
         key.visible = read<std::uint8_t>(input, "model visibility") != 0;
-        key.states.resize(readCount(input, "IK state count", 1'000'000));
+        budget.resize(key.states, readCount(input, "IK state count", 1'000'000), input, 21, "IK state count");
         for (auto &state : key.states) {
             state.name = readName<20>(input, "IK bone name");
             state.enabled = read<std::uint8_t>(input, "IK state") != 0;

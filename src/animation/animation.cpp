@@ -21,6 +21,10 @@ namespace {
 
 using Quat = Float4;
 
+template <std::size_t N> bool finite(const std::array<float, N> &value) {
+    return std::all_of(value.begin(), value.end(), [](float component) { return std::isfinite(component); });
+}
+
 Float3 add(const Float3 &a, const Float3 &b) {
     return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
 }
@@ -337,34 +341,29 @@ float sampleMorph(MorphTrack &track, float frame) {
 }
 
 void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local, std::vector<GlobalPose> &global,
-                      std::vector<std::uint8_t> &state) {
+                      std::vector<std::uint8_t> &state, std::span<const std::size_t> parentOrder) {
     std::fill(state.begin(), state.end(), std::uint8_t{0});
-    const auto resolve = [&](const auto &self, std::size_t index) -> void {
-        if (state[index] == 2)
-            return;
-        if (state[index] == 1) { // malformed parent cycle
-            global[index] = {add(model.bones[index].position, local[index].translation), local[index].rotation};
-            state[index] = 2;
-            return;
-        }
-        state[index] = 1;
+    const auto calculate = [&](std::size_t index) {
         const auto parent = model.bones[index].parent;
-        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size()) {
-            self(self, static_cast<std::size_t>(parent));
-            const auto bindOffset =
-                sub(model.bones[index].position, model.bones[static_cast<std::size_t>(parent)].position);
-            global[index].position = add(
-                global[static_cast<std::size_t>(parent)].position,
-                rotate(global[static_cast<std::size_t>(parent)].rotation, add(bindOffset, local[index].translation)));
-            global[index].rotation = multiply(global[static_cast<std::size_t>(parent)].rotation, local[index].rotation);
+        if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size() &&
+            state[static_cast<std::size_t>(parent)] == 2) {
+            const auto parentIndex = static_cast<std::size_t>(parent);
+            const auto bindOffset = sub(model.bones[index].position, model.bones[parentIndex].position);
+            global[index].position =
+                add(global[parentIndex].position,
+                    rotate(global[parentIndex].rotation, add(bindOffset, local[index].translation)));
+            global[index].rotation = multiply(global[parentIndex].rotation, local[index].rotation);
         } else {
-            global[index].position = add(model.bones[index].position, local[index].translation);
-            global[index].rotation = local[index].rotation;
+            global[index] = {add(model.bones[index].position, local[index].translation), local[index].rotation};
         }
         state[index] = 2;
     };
-    for (std::size_t i = 0; i < model.bones.size(); ++i)
-        resolve(resolve, i);
+    for (const auto index : parentOrder) {
+        calculate(index);
+    }
+    for (std::size_t index = 0; index < model.bones.size(); ++index)
+        if (state[index] != 2)
+            calculate(index); // deterministic root fallback for malformed cycles
 }
 
 #if LIBMMD_ENABLE_PHYSICS
@@ -372,9 +371,12 @@ void calculateGlobalSubtree(const PmxModel &model, const std::vector<LocalPose> 
                             const std::vector<std::vector<std::size_t>> &children, std::size_t root,
                             std::vector<std::uint8_t> &state, std::vector<std::size_t> &touched) {
     touched.clear();
-    const auto update = [&](const auto &self, std::size_t index) -> void {
+    std::vector<std::size_t> pending{root};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
         if (state[index] != 0)
-            return;
+            continue;
         state[index] = 1;
         touched.push_back(index);
         const auto parent = model.bones[index].parent;
@@ -390,9 +392,8 @@ void calculateGlobalSubtree(const PmxModel &model, const std::vector<LocalPose> 
             global[index].rotation = local[index].rotation;
         }
         for (const auto child : children[index])
-            self(self, child);
-    };
-    update(update, root);
+            pending.push_back(child);
+    }
     for (const auto index : touched)
         state[index] = 0;
 }
@@ -432,7 +433,7 @@ Float3 quaternionToEuler(Quat rotation) {
 }
 
 Quat applyIkLimit(Quat rotation, const PmxIkLink &link) {
-    if (!link.limited)
+    if (!link.limited || !finite(link.minimum) || !finite(link.maximum))
         return normalize(rotation);
     auto euler = quaternionToEuler(rotation);
     for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -445,7 +446,7 @@ Quat applyIkLimit(Quat rotation, const PmxIkLink &link) {
 
 void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
                       std::vector<LocalPose> &localScratch, std::vector<GlobalPose> &globalScratch,
-                      std::vector<std::uint8_t> &globalState) {
+                      std::vector<std::uint8_t> &globalState, std::span<const std::size_t> parentOrder) {
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
     for (const auto index : order) {
         poses[index].append = {};
@@ -454,7 +455,8 @@ void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector
     for (const auto index : order) {
         auto &pose = poses[index];
         const auto &bone = model.bones[index];
-        if (bone.inheritParent >= 0 && static_cast<std::size_t>(bone.inheritParent) < poses.size()) {
+        if (bone.inheritParent >= 0 && static_cast<std::size_t>(bone.inheritParent) < poses.size() &&
+            std::isfinite(bone.inheritRatio)) {
             const auto parent = static_cast<std::size_t>(bone.inheritParent);
             LocalPose appendSource;
             if ((bone.flags & 0x0080U) != 0) {
@@ -487,9 +489,94 @@ void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector
 
     for (std::size_t i = 0; i < poses.size(); ++i)
         localScratch[i] = poses[i].local;
-    calculateGlobals(model, localScratch, globalScratch, globalState);
+    calculateGlobals(model, localScratch, globalScratch, globalState, parentOrder);
     for (std::size_t i = 0; i < poses.size(); ++i)
         poses[i].global = globalScratch[i];
+}
+
+// Rebuild only a changed IK link and every transform that can depend on it.
+// Parent descendants need new globals, while append dependents need a new
+// local pose even when they are not children in the parent hierarchy.
+std::size_t rebuildDirtyBonePoses(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
+                                  std::vector<LocalPose> &localScratch, std::vector<GlobalPose> &globalScratch,
+                                  std::span<const std::size_t> parentOrder,
+                                  const std::vector<std::vector<std::size_t>> &children,
+                                  const std::vector<std::vector<std::size_t>> &inheritDependents, std::size_t root,
+                                  std::vector<std::uint8_t> &dirty, std::vector<std::size_t> &pending) {
+    std::fill(dirty.begin(), dirty.end(), std::uint8_t{0});
+    pending.clear();
+    pending.push_back(root);
+    std::size_t count{};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        if (dirty[index] != 0)
+            continue;
+        dirty[index] = 1;
+        ++count;
+        pending.insert(pending.end(), children[index].begin(), children[index].end());
+        pending.insert(pending.end(), inheritDependents[index].begin(), inheritDependents[index].end());
+    }
+
+    const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
+    for (const auto index : order) {
+        if (dirty[index] == 0)
+            continue;
+        auto &pose = poses[index];
+        const auto &bone = model.bones[index];
+        pose.append = {};
+        pose.local = pose.base;
+        if (bone.inheritParent >= 0 && static_cast<std::size_t>(bone.inheritParent) < poses.size() &&
+            std::isfinite(bone.inheritRatio)) {
+            const auto parent = static_cast<std::size_t>(bone.inheritParent);
+            LocalPose appendSource;
+            if ((bone.flags & 0x0080U) != 0) {
+                appendSource = poses[parent].local;
+            } else if ((model.bones[parent].flags & 0x0300U) != 0) {
+                appendSource = poses[parent].append;
+                appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+            } else {
+                appendSource = poses[parent].base;
+                appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+            }
+            if ((bone.flags & 0x0200U) != 0) {
+                pose.append.translation = mul(appendSource.translation, bone.inheritRatio);
+                pose.local.translation = add(pose.local.translation, pose.append.translation);
+            }
+            if ((bone.flags & 0x0100U) != 0) {
+                pose.append.rotation = slerp(identity, appendSource.rotation, bone.inheritRatio);
+                pose.local.rotation = multiply(pose.local.rotation, pose.append.rotation);
+            }
+        }
+        pose.withoutIk = pose.local;
+        pose.local.rotation = multiply(pose.ikRotation, pose.withoutIk.rotation);
+        localScratch[index] = pose.local;
+    }
+
+    const auto calculate = [&](const std::size_t index) {
+        const auto parent = model.bones[index].parent;
+        if (parent >= 0 && static_cast<std::size_t>(parent) < poses.size() &&
+            dirty[static_cast<std::size_t>(parent)] != 1) {
+            const auto parentIndex = static_cast<std::size_t>(parent);
+            const auto bindOffset = sub(model.bones[index].position, model.bones[parentIndex].position);
+            globalScratch[index].position =
+                add(globalScratch[parentIndex].position,
+                    rotate(globalScratch[parentIndex].rotation, add(bindOffset, poses[index].local.translation)));
+            globalScratch[index].rotation = multiply(globalScratch[parentIndex].rotation, poses[index].local.rotation);
+        } else {
+            globalScratch[index] = {add(model.bones[index].position, poses[index].local.translation),
+                                    poses[index].local.rotation};
+        }
+        poses[index].global = globalScratch[index];
+        dirty[index] = 2;
+    };
+    for (const auto index : parentOrder)
+        if (dirty[index] != 0)
+            calculate(index);
+    for (std::size_t index = 0; index < poses.size(); ++index)
+        if (dirty[index] == 1)
+            calculate(index); // deterministic fallback for malformed parent cycles
+    return count;
 }
 
 const VmdIkKey *ikKeyAt(const VmdMotion *motion, float frame) {
@@ -525,17 +612,25 @@ bool ikEnabledAt(const VmdMotion *motion, std::string_view name, float frame) {
 
 void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
              const VmdMotion *motion, float frame, std::vector<LocalPose> &localScratch,
-             std::vector<GlobalPose> &globalScratch, std::vector<std::uint8_t> &globalState, bool enabled) {
+             std::vector<GlobalPose> &globalScratch, std::span<const std::size_t> parentOrder,
+             const std::vector<std::vector<std::size_t>> &children,
+             const std::vector<std::vector<std::size_t>> &inheritDependents, std::vector<std::uint8_t> &dirty,
+             std::vector<std::size_t> &pending, bool enabled) {
     if (!enabled)
         return;
+    constexpr std::uint64_t maxIkBoneUpdates = 1'000'000;
+    std::uint64_t boneUpdates{};
+    bool budgetExceeded{};
     for (const auto ikIndex : order) {
         const auto &ik = model.bones[ikIndex];
-        if ((ik.flags & 0x0020U) == 0 || ik.ikTarget < 0 || static_cast<std::size_t>(ik.ikTarget) >= poses.size() ||
-            !ikEnabledAt(motion, ik.name, frame))
+        if ((ik.flags & 0x0020U) == 0 || !std::isfinite(ik.ikLimitAngle) || ik.ikTarget < 0 ||
+            static_cast<std::size_t>(ik.ikTarget) >= poses.size() || !ikEnabledAt(motion, ik.name, frame))
             continue;
         const int loops = std::clamp(ik.ikLoopCount, 0, 255);
         for (int loop = 0; loop < loops; ++loop) {
             for (const auto &link : ik.ikLinks) {
+                if (budgetExceeded)
+                    break;
                 if (link.bone < 0 || static_cast<std::size_t>(link.bone) >= poses.size())
                     continue;
                 const auto linkIndex = static_cast<std::size_t>(link.bone);
@@ -574,14 +669,18 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
                     multiply(poses[linkIndex].local.rotation, conjugate(poses[linkIndex].withoutIk.rotation));
                 // Rebuild the current phase's append relationships while
                 // retaining the direct cross-phase link update above.
-                rebuildBonePoses(model, order, poses, localScratch, globalScratch, globalState);
+                boneUpdates += rebuildDirtyBonePoses(model, order, poses, localScratch, globalScratch, parentOrder,
+                                                     children, inheritDependents, linkIndex, dirty, pending);
+                if (boneUpdates > maxIkBoneUpdates) {
+                    budgetExceeded = true;
+                    log::warn("IK evaluation budget exceeded");
+                }
             }
             if (length(sub(poses[static_cast<std::size_t>(ik.ikTarget)].global.position,
                            poses[ikIndex].global.position)) < 1e-4F)
                 break;
         }
     }
-    rebuildBonePoses(model, order, poses, localScratch, globalScratch, globalState);
 }
 
 void logLimbDiagnostics(const PmxModel &model, const std::unordered_map<std::string_view, BoneTrack> &boneTracks,
@@ -614,12 +713,14 @@ Float3 transformPoint(const GlobalPose &pose, const Float3 &bindPosition, const 
     return add(rotate(pose.rotation, sub(value, bindPosition)), pose.position);
 }
 
-void skinSdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
+bool skinSdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
     const auto first = vertex.bones[0];
     const auto second = vertex.bones[1];
     if (first < 0 || second < 0 || static_cast<std::size_t>(first) >= global.size() ||
         static_cast<std::size_t>(second) >= global.size())
-        return;
+        return false;
+    if (!std::isfinite(vertex.weights[0]) || !finite(vertex.sdefC) || !finite(vertex.sdefR0) || !finite(vertex.sdefR1))
+        return false;
     const float weight = std::clamp(vertex.weights[0], 0.0F, 1.0F);
     const auto halfDelta = mul(sub(vertex.sdefR0, vertex.sdefR1), 0.5F);
     const auto cr0 = add(vertex.sdefC, mul(halfDelta, 1.0F - weight));
@@ -630,12 +731,17 @@ void skinSdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
                                             model.bones[static_cast<std::size_t>(first)].position, cr0);
     const auto translated1 = transformPoint(global[static_cast<std::size_t>(second)],
                                             model.bones[static_cast<std::size_t>(second)].position, cr1);
-    vertex.position = add(rotate(rotation, sub(vertex.position, vertex.sdefC)),
-                          add(mul(translated0, weight), mul(translated1, 1.0F - weight)));
-    vertex.normal = normalized(rotate(rotation, vertex.normal));
+    const auto position = add(rotate(rotation, sub(vertex.position, vertex.sdefC)),
+                              add(mul(translated0, weight), mul(translated1, 1.0F - weight)));
+    const auto normal = normalized(rotate(rotation, vertex.normal));
+    if (!finite(position) || !finite(normal))
+        return false;
+    vertex.position = position;
+    vertex.normal = normal;
+    return true;
 }
 
-void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
+bool skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<GlobalPose> &global) {
     Quat real{};
     Quat dual{};
     Quat pivot{};
@@ -643,7 +749,7 @@ void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
     for (std::size_t influence = 0; influence < 4; ++influence) {
         const auto bone = vertex.bones[influence];
         float weight = vertex.weights[influence];
-        if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || weight == 0.0F)
+        if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || !std::isfinite(weight) || weight <= 0.0F)
             continue;
         const auto index = static_cast<std::size_t>(bone);
         const auto rotation = global[index].rotation;
@@ -665,8 +771,8 @@ void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
         }
     }
     const float magnitude = std::sqrt(real[0] * real[0] + real[1] * real[1] + real[2] * real[2] + real[3] * real[3]);
-    if (!initialized || magnitude <= 1e-8F)
-        return;
+    if (!initialized || !std::isfinite(magnitude) || !(magnitude > 1e-8F))
+        return false;
     for (std::size_t component = 0; component < 4; ++component) {
         real[component] /= magnitude;
         dual[component] /= magnitude;
@@ -675,12 +781,112 @@ void skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
     for (std::size_t component = 0; component < 4; ++component)
         dual[component] -= real[component] * projection;
     const auto translation = multiplyRaw(dual, conjugate(real));
-    vertex.position =
+    const auto position =
         add(rotate(real, vertex.position), {2.0F * translation[0], 2.0F * translation[1], 2.0F * translation[2]});
-    vertex.normal = normalized(rotate(real, vertex.normal));
+    const auto normal = normalized(rotate(real, vertex.normal));
+    if (!finite(position) || !finite(normal))
+        return false;
+    vertex.position = position;
+    vertex.normal = normal;
+    return true;
 }
 
 } // namespace
+
+MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const float> rootWeights,
+                                        MorphExpansionLimits limits) {
+    MorphExpansionResult result;
+    result.effectiveWeights.resize(model.morphs.size());
+    std::vector<float> propagated(model.morphs.size());
+    for (std::size_t index = 0; index < std::min(model.morphs.size(), rootWeights.size()); ++index)
+        if (std::isfinite(rootWeights[index]))
+            propagated[index] = rootWeights[index];
+    std::vector<std::size_t> indegree(model.morphs.size());
+    std::vector<std::vector<std::size_t>> dependents(model.morphs.size());
+    std::size_t groupCount{};
+    for (std::size_t parent = 0; parent < model.morphs.size(); ++parent) {
+        const auto &morph = model.morphs[parent];
+        if (morph.type != 0 && morph.type != 9)
+            continue;
+        ++groupCount;
+        for (const auto &offset : morph.offsets)
+            if (offset.index >= 0 && static_cast<std::size_t>(offset.index) < model.morphs.size() &&
+                (model.morphs[static_cast<std::size_t>(offset.index)].type == 0 ||
+                 model.morphs[static_cast<std::size_t>(offset.index)].type == 9)) {
+                dependents[parent].push_back(static_cast<std::size_t>(offset.index));
+                ++indegree[static_cast<std::size_t>(offset.index)];
+            }
+    }
+    std::vector<std::size_t> groupQueue;
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        if ((model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] == 0)
+            groupQueue.push_back(index);
+    std::size_t visitedGroups{};
+    while (!groupQueue.empty()) {
+        const auto index = groupQueue.back();
+        groupQueue.pop_back();
+        ++visitedGroups;
+        for (const auto child : dependents[index])
+            if (--indegree[child] == 0)
+                groupQueue.push_back(child);
+    }
+    result.cycleDetected = visitedGroups != groupCount;
+    std::vector<bool> cyclic(model.morphs.size());
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        cyclic[index] = (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] != 0;
+
+    // A cyclic group is evaluated once for its direct leaf offsets.  Group
+    // edges from or into that component are ignored, so malformed data cannot
+    // re-enter the component or consume the expansion budget every frame.
+    std::uint64_t steps{};
+    const auto propagate = [&](std::size_t parent, bool allowGroupChildren) {
+        for (const auto &offset : model.morphs[parent].offsets) {
+            if (steps++ >= limits.maxSteps) {
+                result.budgetExceeded = true;
+                return false;
+            }
+            if (offset.index < 0 || static_cast<std::size_t>(offset.index) >= model.morphs.size() ||
+                !std::isfinite(offset.scalar))
+                continue;
+            const auto child = static_cast<std::size_t>(offset.index);
+            const bool childGroup = model.morphs[child].type == 0 || model.morphs[child].type == 9;
+            if (childGroup && (!allowGroupChildren || cyclic[child]))
+                continue;
+            propagated[child] += propagated[parent] * offset.scalar;
+        }
+        return true;
+    };
+    for (std::size_t index = 0; index < model.morphs.size() && !result.budgetExceeded; ++index)
+        if (cyclic[index] && std::isfinite(propagated[index]) && std::abs(propagated[index]) >= 1e-8F)
+            static_cast<void>(propagate(index, false));
+
+    std::fill(indegree.begin(), indegree.end(), 0U);
+    for (std::size_t parent = 0; parent < model.morphs.size(); ++parent) {
+        if (cyclic[parent] || (model.morphs[parent].type != 0 && model.morphs[parent].type != 9))
+            continue;
+        for (const auto child : dependents[parent])
+            if (!cyclic[child])
+                ++indegree[child];
+    }
+    groupQueue.clear();
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        if (!cyclic[index] && (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] == 0)
+            groupQueue.push_back(index);
+    while (!groupQueue.empty() && !result.budgetExceeded) {
+        const auto parent = groupQueue.back();
+        groupQueue.pop_back();
+        const auto weight = propagated[parent];
+        if (std::isfinite(weight) && std::abs(weight) >= 1e-8F && !propagate(parent, true))
+            break;
+        for (const auto child : dependents[parent])
+            if (!cyclic[child] && --indegree[child] == 0)
+                groupQueue.push_back(child);
+    }
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        if (model.morphs[index].type != 0 && model.morphs[index].type != 9 && std::isfinite(propagated[index]))
+            result.effectiveWeights[index] = propagated[index];
+    return result;
+}
 
 struct MmdAnimator::Impl {
     BoneOrders boneOrders;
@@ -692,6 +898,10 @@ struct MmdAnimator::Impl {
     std::unordered_map<std::string_view, MorphTrack> morphTracks;
     std::unordered_map<std::uint32_t, BezierLut> bezierLuts;
     std::vector<std::vector<std::size_t>> boneChildren;
+    std::vector<std::vector<std::size_t>> inheritDependents;
+    std::vector<std::size_t> parentOrder;
+    std::vector<std::uint8_t> dirtyBones;
+    std::vector<std::size_t> dirtyScratch;
     std::vector<std::uint8_t> subtreeState;
     std::vector<std::size_t> subtreeScratch;
 };
@@ -703,15 +913,31 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
     impl_->globalScratch.resize(model_.bones.size());
     impl_->globalState.resize(model_.bones.size());
     impl_->boneChildren.resize(model_.bones.size());
+    impl_->inheritDependents.resize(model_.bones.size());
+    impl_->dirtyBones.resize(model_.bones.size());
+    std::vector<std::size_t> indegree(model_.bones.size());
     impl_->subtreeState.resize(model_.bones.size());
     for (std::size_t index = 0; index < model_.bones.size(); ++index) {
         const auto parent = model_.bones[index].parent;
         if (parent >= 0 && static_cast<std::size_t>(parent) < model_.bones.size() &&
             static_cast<std::size_t>(parent) != index) {
             impl_->boneChildren[static_cast<std::size_t>(parent)].push_back(index);
+            ++indegree[index];
         }
+        const auto inheritParent = model_.bones[index].inheritParent;
+        if (inheritParent >= 0 && static_cast<std::size_t>(inheritParent) < model_.bones.size() &&
+            static_cast<std::size_t>(inheritParent) != index)
+            impl_->inheritDependents[static_cast<std::size_t>(inheritParent)].push_back(index);
     }
+    for (std::size_t index = 0; index < indegree.size(); ++index)
+        if (indegree[index] == 0)
+            impl_->parentOrder.push_back(index);
+    for (std::size_t cursor = 0; cursor < impl_->parentOrder.size(); ++cursor)
+        for (const auto child : impl_->boneChildren[impl_->parentOrder[cursor]])
+            if (--indegree[child] == 0)
+                impl_->parentOrder.push_back(child);
     impl_->subtreeScratch.reserve(model_.bones.size());
+    impl_->dirtyScratch.reserve(model_.bones.size());
 }
 MmdAnimator::~MmdAnimator() = default;
 void MmdAnimator::setMotion(const VmdMotion *motion) {
@@ -856,22 +1082,17 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         if (override.index < morphWeights.size())
             morphWeights[override.index] = std::clamp(override.weight, 0.0F, 1.0F);
     }
-    std::vector<std::uint8_t> morphStack(model_.morphs.size());
-    std::function<void(std::size_t, float)> applyMorph = [&](std::size_t index, float weight) {
-        if (index >= model_.morphs.size() || morphStack[index] != 0 || std::abs(weight) < 1e-8F)
+    const auto applyMorph = [&](std::size_t index, float weight) {
+        if (index >= model_.morphs.size() || !std::isfinite(weight) || std::abs(weight) < 1e-8F)
             return;
-        morphStack[index] = 1;
         const auto &morph = model_.morphs[index];
         if (gpuSkinning && morph.type == 1) {
             result.morphWeights[index] += weight;
-            morphStack[index] = 0;
             return;
         }
         for (const auto &offset : morph.offsets) {
-            if (morph.type == 0 || morph.type == 9)
-                applyMorph(static_cast<std::size_t>(offset.index), weight * offset.scalar);
-            else if (morph.type == 1 && offset.index >= 0 &&
-                     static_cast<std::size_t>(offset.index) < result.vertices.size()) {
+            if (morph.type == 1 && offset.index >= 0 &&
+                static_cast<std::size_t>(offset.index) < result.vertices.size()) {
                 result.vertices[static_cast<std::size_t>(offset.index)].position =
                     add(result.vertices[static_cast<std::size_t>(offset.index)].position, mul(offset.vector3, weight));
             } else if (morph.type == 2 && offset.index >= 0 && static_cast<std::size_t>(offset.index) < local.size()) {
@@ -879,6 +1100,17 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 local[bone].translation = add(local[bone].translation, mul(offset.vector3, weight));
                 local[bone].rotation =
                     multiply(local[bone].rotation, slerp({0.0F, 0.0F, 0.0F, 1.0F}, offset.vector4, weight));
+            } else if (morph.type >= 3 && morph.type <= 7 && offset.index >= 0 &&
+                       static_cast<std::size_t>(offset.index) < result.vertices.size()) {
+                auto &vertex = result.vertices[static_cast<std::size_t>(offset.index)];
+                if (morph.type == 3) {
+                    vertex.uv[0] += offset.vector4[0] * weight;
+                    vertex.uv[1] += offset.vector4[1] * weight;
+                } else {
+                    auto &channel = vertex.additionalUv[static_cast<std::size_t>(morph.type - 4)];
+                    for (std::size_t component = 0; component < channel.size(); ++component)
+                        channel[component] += offset.vector4[component] * weight;
+                }
             } else if (morph.type == 8) {
                 const auto first = offset.index < 0 ? std::size_t{0} : static_cast<std::size_t>(offset.index);
                 const auto last =
@@ -937,10 +1169,12 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 }
             }
         }
-        morphStack[index] = 0;
     };
-    for (std::size_t i = 0; i < morphWeights.size(); ++i)
-        applyMorph(i, morphWeights[i]);
+    const auto expansion = expandMorphWeights(model_, morphWeights);
+    if (expansion.budgetExceeded)
+        log::warn("Morph expansion budget exceeded");
+    for (std::size_t index = 0; index < expansion.effectiveWeights.size(); ++index)
+        applyMorph(index, expansion.effectiveWeights[index]);
 
     auto &poses = impl_->poses;
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
@@ -972,9 +1206,10 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     auto &global = impl_->globalScratch;
     const auto &boneOrders = impl_->boneOrders;
     rebuildBonePoses(model_, boneOrders.beforePhysics, poses, impl_->localScratch, impl_->globalScratch,
-                     impl_->globalState);
+                     impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState, ikEnabled_);
+            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones, impl_->dirtyScratch,
+            ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
     for (std::size_t i = 0; i < global.size(); ++i)
@@ -1093,9 +1328,10 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     // performed when physics has no dynamic bodies so their VMD/IK result is
     // still present in a model that only uses post-physics ordering.
     rebuildBonePoses(model_, boneOrders.afterPhysics, poses, impl_->localScratch, impl_->globalScratch,
-                     impl_->globalState);
+                     impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->globalState, ikEnabled_);
+            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones, impl_->dirtyScratch,
+            ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;
         global[i] = poses[i].global;
@@ -1116,12 +1352,12 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 
     for (auto &vertex : result.vertices) {
         if (!gpuSkinning && vertex.weightType == PmxWeightType::sdef) {
-            skinSdef(vertex, model_, global);
-            continue;
+            if (skinSdef(vertex, model_, global))
+                continue;
         }
         if (!gpuSkinning && vertex.weightType == PmxWeightType::qdef) {
-            skinQdef(vertex, model_, global);
-            continue;
+            if (skinQdef(vertex, model_, global))
+                continue;
         }
         if (gpuSkinning)
             continue;
@@ -1135,7 +1371,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         for (std::size_t influence = 0; influence < influenceCount; ++influence) {
             const auto bone = vertex.bones[influence];
             const float weight = vertex.weights[influence];
-            if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || weight == 0.0F)
+            if (bone < 0 || static_cast<std::size_t>(bone) >= global.size() || !std::isfinite(weight) || weight <= 0.0F)
                 continue;
             position = add(position,
                            mul(transformPoint(global[static_cast<std::size_t>(bone)],
@@ -1144,7 +1380,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             normal = add(normal, mul(rotate(global[static_cast<std::size_t>(bone)].rotation, vertex.normal), weight));
             totalWeight += weight;
         }
-        if (totalWeight > 1e-6F) {
+        if (std::isfinite(totalWeight) && totalWeight > 1e-6F && finite(position) && finite(normal)) {
             vertex.position = mul(position, 1.0F / totalWeight);
             vertex.normal = normalized(normal);
         }
@@ -1153,24 +1389,35 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 }
 
 PreviewNormalization previewNormalization(const PmxModel &model) {
-    if (model.vertices.empty())
-        return {};
-    auto minimum = model.vertices.front().position;
-    auto maximum = minimum;
+    Float3 minimum{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+                   std::numeric_limits<float>::infinity()};
+    Float3 maximum{-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+                   -std::numeric_limits<float>::infinity()};
+    bool found = false;
     for (const auto &vertex : model.vertices) {
+        if (!finite(vertex.position))
+            continue;
+        found = true;
         for (std::size_t axis = 0; axis < 3; ++axis) {
             minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
             maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
         }
     }
+    if (!found)
+        return {};
     PreviewNormalization result;
-    result.center = {(minimum[0] + maximum[0]) * 0.5F, (minimum[1] + maximum[1]) * 0.5F,
-                     (minimum[2] + maximum[2]) * 0.5F};
-    result.scale = 1.8F / std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 0.001F});
+    result.center = {std::midpoint(minimum[0], maximum[0]), std::midpoint(minimum[1], maximum[1]),
+                     std::midpoint(minimum[2], maximum[2])};
+    const auto extent = std::max({static_cast<double>(maximum[0]) - static_cast<double>(minimum[0]),
+                                  static_cast<double>(maximum[1]) - static_cast<double>(minimum[1]),
+                                  static_cast<double>(maximum[2]) - static_cast<double>(minimum[2]), 0.001});
+    result.scale = std::isfinite(extent) && extent > 0.0 ? static_cast<float>(1.8 / extent) : 1.0F;
     return result;
 }
 
 void normalizeForPreview(std::vector<PmxVertex> &vertices, const PreviewNormalization &normalization) {
+    if (!finite(normalization.center) || !std::isfinite(normalization.scale) || !(normalization.scale > 0.0F))
+        return;
     for (auto &vertex : vertices)
         for (std::size_t axis = 0; axis < 3; ++axis) {
             vertex.position[axis] = (vertex.position[axis] - normalization.center[axis]) * normalization.scale;

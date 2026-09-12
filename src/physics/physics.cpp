@@ -14,6 +14,12 @@
 
 namespace mmd {
 
+namespace {
+bool finiteVector(const Float3 &value) {
+    return std::all_of(value.begin(), value.end(), [](float component) { return std::isfinite(component); });
+}
+} // namespace
+
 struct MmdPhysics::Impl {
 #if LIBMMD_HAS_BULLET
     std::unique_ptr<btDefaultCollisionConfiguration> collisionConfiguration;
@@ -313,7 +319,7 @@ void SoftBodySimulation::reset() {
 }
 
 void SoftBodySimulation::step(float deltaSeconds, const Float3 &gravity) {
-    if (!available() || deltaSeconds <= 0.0F)
+    if (!available() || !std::isfinite(deltaSeconds) || !finiteVector(gravity) || !(deltaSeconds > 0.0F))
         return;
     const float dt = std::min(deltaSeconds, 0.05F);
     const float damping = std::pow(0.995F, dt * 60.0F);
@@ -406,7 +412,7 @@ void MmdPhysics::reset() {
 
 void MmdPhysics::step(float deltaSeconds) {
 #if LIBMMD_HAS_BULLET
-    if (deltaSeconds > 0.0F) {
+    if (std::isfinite(deltaSeconds) && deltaSeconds > 0.0F) {
         const float dt = std::min(deltaSeconds, 0.25F);
         impl_->elapsed += dt;
         auto gravity = impl_->gravity;
@@ -447,6 +453,8 @@ void MmdPhysics::step(float deltaSeconds) {
 }
 
 void MmdPhysics::setGravity(const Float3 &gravity) {
+    if (!finiteVector(gravity))
+        return;
 #if LIBMMD_HAS_BULLET
     impl_->gravity = gravity;
     impl_->world->setGravity(vector(gravity));
@@ -456,6 +464,8 @@ void MmdPhysics::setGravity(const Float3 &gravity) {
 }
 
 void MmdPhysics::setGravityNoise(float amplitude, float frequency) {
+    if (!std::isfinite(amplitude) || !std::isfinite(frequency))
+        return;
 #if LIBMMD_HAS_BULLET
     impl_->gravityNoiseAmplitude = std::max(amplitude, 0.0F);
     impl_->gravityNoiseFrequency = std::max(frequency, 0.0F);
@@ -537,6 +547,8 @@ void MmdPhysics::applyImpulse(std::size_t body, const Float3 &linear, const Floa
 #if LIBMMD_HAS_BULLET
     if (body >= impl_->bodies.size())
         throw std::out_of_range("PMX rigid body index");
+    if (!finiteVector(linear) || !finiteVector(angular))
+        return;
     auto linearValue = vector(linear);
     auto angularValue = vector(angular);
     if (local) {

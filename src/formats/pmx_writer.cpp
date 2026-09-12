@@ -209,9 +209,15 @@ ValidationResult pmx::validate(const PmxModel &model) {
     addError(result, materialIndices == model.indices.size(), "material ranges do not cover indices");
     for (std::size_t vertexIndex = 0; vertexIndex < model.vertices.size(); ++vertexIndex) {
         const auto &vertex = model.vertices[vertexIndex];
-        addIndexedError(result,
-                        finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) && finite(vertex.weights),
-                        "vertex contains non-finite values", ReferenceObjectKind::vertex, vertexIndex);
+        bool vertexFinite = finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) &&
+                            finite(vertex.weights) && finite(vertex.edgeScale);
+        for (std::size_t i = 0; i < model.metadata.additionalUvCount; ++i)
+            vertexFinite = vertexFinite && finite(vertex.additionalUv[i]);
+        addIndexedError(result, vertexFinite, "vertex contains non-finite values", ReferenceObjectKind::vertex,
+                        vertexIndex);
+        if (vertex.weightType == PmxWeightType::sdef)
+            addIndexedError(result, finite(vertex.sdefC) && finite(vertex.sdefR0) && finite(vertex.sdefR1),
+                            "SDEF parameters contain non-finite values", ReferenceObjectKind::vertex, vertexIndex);
         addIndexedError(result, model.metadata.version >= 2.1F || vertex.weightType != PmxWeightType::qdef,
                         "QDEF requires PMX 2.1", ReferenceObjectKind::vertex, vertexIndex);
         const auto boneCount = vertex.weightType == PmxWeightType::bdef1 ? 1U
@@ -224,6 +230,20 @@ ValidationResult pmx::validate(const PmxModel &model) {
     }
     for (std::size_t boneIndex = 0; boneIndex < model.bones.size(); ++boneIndex) {
         const auto &bone = model.bones[boneIndex];
+        addIndexedError(result, finite(bone.position), "bone position contains non-finite values",
+                        ReferenceObjectKind::bone, boneIndex);
+        if ((bone.flags & 0x0001U) == 0)
+            addIndexedError(result, finite(bone.tailOffset), "bone tail offset contains non-finite values",
+                            ReferenceObjectKind::bone, boneIndex);
+        if ((bone.flags & 0x0300U) != 0)
+            addIndexedError(result, finite(bone.inheritRatio), "bone inherit ratio is non-finite",
+                            ReferenceObjectKind::bone, boneIndex);
+        if ((bone.flags & 0x0400U) != 0)
+            addIndexedError(result, finite(bone.fixedAxis), "bone fixed axis contains non-finite values",
+                            ReferenceObjectKind::bone, boneIndex);
+        if ((bone.flags & 0x0800U) != 0)
+            addIndexedError(result, finite(bone.localAxisX) && finite(bone.localAxisZ),
+                            "bone local axis contains non-finite values", ReferenceObjectKind::bone, boneIndex);
         addIndexedError(result, inRange(bone.parent, model.bones.size()), "bone parent index is out of range",
                         ReferenceObjectKind::bone, boneIndex);
         if ((bone.flags & 0x0001U) != 0)
@@ -233,38 +253,48 @@ ValidationResult pmx::validate(const PmxModel &model) {
             addIndexedError(result, inRange(bone.inheritParent, model.bones.size()),
                             "bone inherit index is out of range", ReferenceObjectKind::bone, boneIndex);
         if ((bone.flags & 0x0020U) != 0) {
+            addIndexedError(result, finite(bone.ikLimitAngle), "IK limit angle is non-finite",
+                            ReferenceObjectKind::bone, boneIndex);
             addIndexedError(result, inRange(bone.ikTarget, model.bones.size()), "IK target index is out of range",
                             ReferenceObjectKind::bone, boneIndex);
             for (const auto &link : bone.ikLinks)
                 addIndexedError(result, inRange(link.bone, model.bones.size()), "IK link index is out of range",
                                 ReferenceObjectKind::bone, boneIndex);
+            for (const auto &link : bone.ikLinks)
+                if (link.limited)
+                    addIndexedError(result, finite(link.minimum) && finite(link.maximum),
+                                    "IK link limit contains non-finite values", ReferenceObjectKind::bone, boneIndex);
         }
     }
-    std::vector<std::uint8_t> boneVisit(model.bones.size());
-    const auto visitBone = [&](auto &&self, std::size_t index) -> bool {
-        if (boneVisit[index] == 1)
-            return false;
-        if (boneVisit[index] == 2)
-            return true;
-        boneVisit[index] = 1;
-        const auto visitEdge = [&](std::int32_t target) {
-            if (target < 0 || static_cast<std::size_t>(target) >= model.bones.size())
-                return true;
-            return self(self, static_cast<std::size_t>(target));
+    std::vector<std::vector<std::size_t>> dependents(model.bones.size());
+    std::vector<std::size_t> indegree(model.bones.size());
+    for (std::size_t child = 0; child < model.bones.size(); ++child) {
+        const auto addDependency = [&](std::int32_t parent) {
+            if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size()) {
+                dependents[static_cast<std::size_t>(parent)].push_back(child);
+                ++indegree[child];
+            }
         };
-        if (!visitEdge(model.bones[index].parent) ||
-            ((model.bones[index].flags & 0x0300U) != 0 && !visitEdge(model.bones[index].inheritParent)))
-            return false;
-        boneVisit[index] = 2;
-        return true;
-    };
-    for (std::size_t index = 0; index < model.bones.size(); ++index) {
-        if (!visitBone(visitBone, index)) {
-            result.issues.push_back(
-                {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone dependency graph contains a cycle"});
-            break;
-        }
+        addDependency(model.bones[child].parent);
+        if ((model.bones[child].flags & 0x0300U) != 0)
+            addDependency(model.bones[child].inheritParent);
     }
+    std::vector<std::size_t> pending;
+    for (std::size_t index = 0; index < indegree.size(); ++index)
+        if (indegree[index] == 0)
+            pending.push_back(index);
+    std::size_t visited{};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        ++visited;
+        for (const auto child : dependents[index])
+            if (--indegree[child] == 0)
+                pending.push_back(child);
+    }
+    if (visited != model.bones.size())
+        result.issues.push_back(
+            {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone dependency graph contains a cycle"});
     for (std::size_t morphIndex = 0; morphIndex < model.morphs.size(); ++morphIndex) {
         const auto &morph = model.morphs[morphIndex];
         addError(result, morph.type <= 10, "unknown morph type");
@@ -279,6 +309,42 @@ ValidationResult pmx::validate(const PmxModel &model) {
             addIndexedError(result,
                             inRange(offset.index, count, morph.type != 1 && !(morph.type >= 3 && morph.type <= 7)),
                             "morph reference index is out of range", ReferenceObjectKind::morph, morphIndex);
+            bool valuesFinite = true;
+            switch (morph.type) {
+            case 0:
+            case 9:
+                valuesFinite = finite(offset.scalar);
+                break;
+            case 1:
+                valuesFinite = finite(offset.vector3);
+                break;
+            case 2:
+                valuesFinite = finite(offset.vector3) && finite(offset.vector4);
+                break;
+            case 3:
+            case 4:
+            case 5:
+            case 6:
+            case 7:
+                valuesFinite = finite(offset.vector4);
+                break;
+            case 8:
+                valuesFinite = finite(offset.materialVectors[0]) && finite(offset.materialVectors[1]) &&
+                               finite(offset.materialVectors[2]) && finite(offset.materialVectors[3]) &&
+                               finite(offset.materialVectors[4]) && finite(offset.materialVectors[5]) &&
+                               finite(offset.materialVectors[6]);
+                break;
+            case 10:
+                valuesFinite = finite(offset.vector3) && finite(offset.tertiaryVector3);
+                break;
+            default:
+                break;
+            }
+            addIndexedError(result, valuesFinite, "morph offset contains non-finite values", ReferenceObjectKind::morph,
+                            morphIndex);
+            if (morph.type == 8)
+                addIndexedError(result, offset.operation <= 1, "material morph operation is invalid",
+                                ReferenceObjectKind::morph, morphIndex);
         }
     }
     for (std::size_t frameIndex = 0; frameIndex < model.displayFrames.size(); ++frameIndex)
