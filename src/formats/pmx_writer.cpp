@@ -312,6 +312,9 @@ ValidationResult pmx::validate(const PmxModel &model) {
                             "morph reference index is out of range", ReferenceObjectKind::morph, morphIndex);
             addIndexedError(result, internal::finiteMorphOffset(morph.type, offset),
                             "morph offset contains invalid numeric values", ReferenceObjectKind::morph, morphIndex);
+            if (morph.type == 8)
+                addIndexedError(result, internal::validMorphOffsetOperation(morph.type, offset),
+                                "material morph operation is invalid", ReferenceObjectKind::morph, morphIndex);
         }
     }
     for (std::size_t frameIndex = 0; frameIndex < model.displayFrames.size(); ++frameIndex)

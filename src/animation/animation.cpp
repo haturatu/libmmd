@@ -211,6 +211,15 @@ struct BoneOrders {
 struct DirtyRebuildResult {
     std::size_t updated{};
     bool budgetExceeded{};
+    std::uint64_t localPoseRebuilds{};
+    std::uint64_t globalPoseRebuilds{};
+    std::uint64_t localPoseVisits{};
+    std::uint64_t globalPoseVisits{};
+};
+
+struct IkEvaluationBudget {
+    IkEvaluationLimits limits;
+    IkEvaluationStats stats;
 };
 
 LocalPose sampleBone(const std::vector<const VmdBoneKey *> &keys, float frame,
@@ -533,7 +542,7 @@ DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const 
             continue;
         if (count == maxUpdates) {
             clearDirty();
-            return {maxUpdates + 1U, true};
+            return {count, true};
         }
         dirty[index] = 1;
         dirtyNodes.push_back(index);
@@ -543,6 +552,10 @@ DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const 
     }
 
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
+    std::uint64_t localPoseRebuilds{};
+    std::uint64_t globalPoseRebuilds{};
+    std::uint64_t localPoseVisits{};
+    std::uint64_t globalPoseVisits{};
     dirtyLocalOrder = dirtyNodes;
     std::ranges::sort(dirtyLocalOrder, [&](const auto left, const auto right) {
         if (phaseRank[left] != phaseRank[right])
@@ -550,6 +563,7 @@ DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const 
         return left < right;
     });
     for (const auto index : dirtyLocalOrder) {
+        ++localPoseVisits;
         // Keep the existing phase semantics: a rebuild requested from one
         // phase does not rebuild a bone scheduled for the other phase's local
         // pass. Its directly updated global pose is still refreshed below.
@@ -557,6 +571,7 @@ DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const 
             continue;
         if (dirty[index] == 0)
             continue;
+        ++localPoseRebuilds;
         auto &pose = poses[index];
         const auto &bone = model.bones[index];
         pose.append = {};
@@ -603,6 +618,7 @@ DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const 
                                     poses[index].local.rotation};
         }
         poses[index].global = globalScratch[index];
+        ++globalPoseRebuilds;
         dirty[index] = 2;
     };
     dirtyGlobalOrder = dirtyNodes;
@@ -611,11 +627,13 @@ DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const 
             return parentRank[left] < parentRank[right];
         return left < right;
     });
-    for (const auto index : dirtyGlobalOrder)
+    for (const auto index : dirtyGlobalOrder) {
+        ++globalPoseVisits;
         if (dirty[index] != 0)
             calculate(index); // deterministic fallback for malformed parent cycles
+    }
     clearDirty();
-    return {count, false};
+    return {count, false, localPoseRebuilds, globalPoseRebuilds, localPoseVisits, globalPoseVisits};
 }
 
 const VmdIkKey *ikKeyAt(const VmdMotion *motion, float frame) {
@@ -655,16 +673,12 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
              std::span<const std::size_t> parentRank, const std::vector<std::vector<std::size_t>> &children,
              const std::vector<std::vector<std::size_t>> &inheritDependents, std::vector<std::uint8_t> &dirty,
              std::vector<std::size_t> &pending, std::vector<std::size_t> &dirtyNodes,
-             std::vector<std::size_t> &dirtyLocalOrder, std::vector<std::size_t> &dirtyGlobalOrder, bool enabled) {
-    if (!enabled)
+             std::vector<std::size_t> &dirtyLocalOrder, std::vector<std::size_t> &dirtyGlobalOrder, bool enabled,
+             IkEvaluationBudget &budget) {
+    if (!enabled || budget.stats.budgetExceeded)
         return;
-    constexpr std::uint64_t maxIkLinkSteps = 1'000'000;
-    constexpr std::uint64_t maxIkBoneUpdates = 1'000'000;
-    std::uint64_t linkSteps{};
-    std::uint64_t boneUpdates{};
-    bool budgetExceeded{};
     for (const auto ikIndex : order) {
-        if (budgetExceeded)
+        if (budget.stats.budgetExceeded)
             break;
         const auto &ik = model.bones[ikIndex];
         if ((ik.flags & 0x0020U) == 0 || !std::isfinite(ik.ikLimitAngle) || ik.ikTarget < 0 ||
@@ -672,17 +686,17 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
             continue;
         const int loops = std::clamp(ik.ikLoopCount, 0, 255);
         for (int loop = 0; loop < loops; ++loop) {
-            if (budgetExceeded)
+            if (budget.stats.budgetExceeded)
                 break;
             for (const auto &link : ik.ikLinks) {
-                if (budgetExceeded)
+                if (budget.stats.budgetExceeded)
                     break;
-                if (linkSteps >= maxIkLinkSteps) {
-                    budgetExceeded = true;
+                if (budget.stats.linkSteps >= budget.limits.maxLinkSteps) {
+                    budget.stats.budgetExceeded = true;
                     log::warn("IK link evaluation budget exceeded");
                     break;
                 }
-                ++linkSteps;
+                ++budget.stats.linkSteps;
                 if (link.bone < 0 || static_cast<std::size_t>(link.bone) >= poses.size())
                     continue;
                 const auto linkIndex = static_cast<std::size_t>(link.bone);
@@ -723,23 +737,39 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
                     multiply(poses[linkIndex].local.rotation, conjugate(poses[linkIndex].withoutIk.rotation));
                 // Rebuild the current phase's append relationships while
                 // retaining the direct cross-phase link update above.
-                const auto remainingBoneBudget = maxIkBoneUpdates - boneUpdates;
-                const auto rebuild =
-                    rebuildDirtyBonePoses(model, phaseRank, parentRank, poses, localScratch, globalScratch, children,
-                                          inheritDependents, linkIndex, dirty, pending, dirtyNodes, dirtyLocalOrder,
-                                          dirtyGlobalOrder, static_cast<std::size_t>(remainingBoneBudget));
+                if (budget.stats.dirtyBoneUpdates >= budget.limits.maxBoneUpdates) {
+                    // Do not leave a partially applied IK rotation with stale
+                    // global poses when the dirty-closure budget is exhausted.
+                    poses[linkIndex].ikRotation = previousIkRotation;
+                    poses[linkIndex].local.rotation = previousLocalRotation;
+                    budget.stats.budgetExceeded = true;
+                    log::warn("IK bone update budget exceeded");
+                    break;
+                }
+                const auto remainingBoneBudget = budget.limits.maxBoneUpdates - budget.stats.dirtyBoneUpdates;
+                const auto maxUpdates = remainingBoneBudget > std::numeric_limits<std::size_t>::max()
+                                            ? std::numeric_limits<std::size_t>::max()
+                                            : static_cast<std::size_t>(remainingBoneBudget);
+                const auto rebuild = rebuildDirtyBonePoses(
+                    model, phaseRank, parentRank, poses, localScratch, globalScratch, children, inheritDependents,
+                    linkIndex, dirty, pending, dirtyNodes, dirtyLocalOrder, dirtyGlobalOrder, maxUpdates);
                 if (rebuild.budgetExceeded) {
                     // Do not leave a partially applied IK rotation with stale
                     // global poses when the dirty-closure budget is exhausted.
                     poses[linkIndex].ikRotation = previousIkRotation;
                     poses[linkIndex].local.rotation = previousLocalRotation;
-                    budgetExceeded = true;
+                    budget.stats.budgetExceeded = true;
                     log::warn("IK bone update budget exceeded");
                 }
-                if (!rebuild.budgetExceeded)
-                    boneUpdates += rebuild.updated;
+                if (!rebuild.budgetExceeded) {
+                    budget.stats.dirtyBoneUpdates += rebuild.updated;
+                    budget.stats.localPoseRebuilds += rebuild.localPoseRebuilds;
+                    budget.stats.globalPoseRebuilds += rebuild.globalPoseRebuilds;
+                    budget.stats.localPoseVisits += rebuild.localPoseVisits;
+                    budget.stats.globalPoseVisits += rebuild.globalPoseVisits;
+                }
             }
-            if (budgetExceeded)
+            if (budget.stats.budgetExceeded)
                 break;
             if (length(sub(poses[static_cast<std::size_t>(ik.ikTarget)].global.position,
                            poses[ikIndex].global.position)) < 1e-4F)
@@ -975,6 +1005,8 @@ struct MmdAnimator::Impl {
     std::vector<std::size_t> dirtyGlobalOrder;
     std::vector<std::uint8_t> subtreeState;
     std::vector<std::size_t> subtreeScratch;
+    IkEvaluationLimits ikLimits;
+    IkEvaluationStats ikStats;
 };
 
 MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make_unique<Impl>()) {
@@ -1080,6 +1112,14 @@ void MmdAnimator::setIkEnabled(bool enabled) noexcept {
     ikEnabled_ = enabled;
 }
 
+void MmdAnimator::setIkEvaluationLimits(IkEvaluationLimits limits) noexcept {
+    impl_->ikLimits = limits;
+}
+
+IkEvaluationStats MmdAnimator::ikEvaluationStats() const noexcept {
+    return impl_->ikStats;
+}
+
 MotionCompatibility MmdAnimator::motionCompatibility() const {
     MotionCompatibility result;
     result.pmxBoneCount = model_.bones.size();
@@ -1112,6 +1152,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     static_cast<void>(deltaSeconds);
 #endif
     AnimatedModelFrame result;
+    IkEvaluationBudget ikBudget{impl_->ikLimits, {}};
     result.vertices = model_.vertices;
     result.materials.reserve(model_.materials.size());
     for (const auto &material : model_.materials) {
@@ -1171,16 +1212,15 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         if (index >= model_.morphs.size() || !std::isfinite(weight) || std::abs(weight) < 1e-8F)
             return;
         const auto &morph = model_.morphs[index];
+        const bool morphUsable = std::ranges::all_of(
+            morph.offsets, [&](const auto &offset) { return internal::validMorphOffset(morph.type, offset); });
+        if (!morphUsable)
+            return;
         if (gpuSkinning && morph.type == 1) {
-            if (!std::ranges::all_of(
-                    morph.offsets, [&](const auto &offset) { return internal::finiteMorphOffset(morph.type, offset); }))
-                return;
             result.morphWeights[index] += weight;
             return;
         }
         for (const auto &offset : morph.offsets) {
-            if (!internal::finiteMorphOffset(morph.type, offset))
-                continue;
             if (morph.type == 1 && offset.index >= 0 &&
                 static_cast<std::size_t>(offset.index) < result.vertices.size()) {
                 result.vertices[static_cast<std::size_t>(offset.index)].position =
@@ -1273,7 +1313,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             continue;
         for (const auto &offset : override.offsets) {
             if (offset.index < 0 || !std::isfinite(override.weight) ||
-                !internal::finiteMorphOffset(override.type, offset))
+                !internal::validMorphOffset(override.type, offset))
                 continue;
             if (override.type == 1U) {
                 if (static_cast<std::size_t>(offset.index) < result.vertices.size())
@@ -1301,7 +1341,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
             impl_->beforePhysicsRank, impl_->parentRank, impl_->boneChildren, impl_->inheritDependents,
             impl_->dirtyBones, impl_->dirtyScratch, impl_->dirtyNodes, impl_->dirtyLocalOrder, impl_->dirtyGlobalOrder,
-            ikEnabled_);
+            ikEnabled_, ikBudget);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
     for (std::size_t i = 0; i < global.size(); ++i)
@@ -1425,7 +1465,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
             impl_->afterPhysicsRank, impl_->parentRank, impl_->boneChildren, impl_->inheritDependents,
             impl_->dirtyBones, impl_->dirtyScratch, impl_->dirtyNodes, impl_->dirtyLocalOrder, impl_->dirtyGlobalOrder,
-            ikEnabled_);
+            ikEnabled_, ikBudget);
+    impl_->ikStats = ikBudget.stats;
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;
         global[i] = poses[i].global;

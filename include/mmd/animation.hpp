@@ -64,6 +64,24 @@ struct MorphExpansionResult {
 [[nodiscard]] MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const float> rootWeights,
                                                       MorphExpansionLimits limits = {});
 
+// IK evaluation is bounded per frame, including models with both pre- and
+// post-physics IK phases. Limits are configurable for applications that need
+// to accommodate unusually dense rigs while retaining deterministic defaults.
+struct IkEvaluationLimits {
+    std::uint64_t maxLinkSteps{25'000};
+    std::uint64_t maxBoneUpdates{100'000};
+};
+
+struct IkEvaluationStats {
+    std::uint64_t linkSteps{};
+    std::uint64_t dirtyBoneUpdates{};
+    std::uint64_t localPoseRebuilds{};
+    std::uint64_t globalPoseRebuilds{};
+    std::uint64_t localPoseVisits{};
+    std::uint64_t globalPoseVisits{};
+    bool budgetExceeded{};
+};
+
 struct MotionCompatibility {
     std::size_t pmxBoneCount{};
     std::size_t vmdBoneKeyCount{};
@@ -99,6 +117,8 @@ class MmdAnimator {
     void setPose(const VpdPose *pose);
     void setPhysics(MmdPhysics *physics);
     void setIkEnabled(bool enabled) noexcept;
+    void setIkEvaluationLimits(IkEvaluationLimits limits) noexcept;
+    [[nodiscard]] IkEvaluationStats ikEvaluationStats() const noexcept;
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
     [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false,
                                               MorphOverrides overrides = {});

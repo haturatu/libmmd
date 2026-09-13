@@ -1001,6 +1001,9 @@ ValidationResult PmxDocument::validateProperty(ReferenceObjectKind kind, std::si
                 "morph reference index is out of range", static_cast<std::uint32_t>(subIndex));
             addError(internal::finiteMorphOffset(value.type, value.offsets[subIndex]),
                      "morph offset contains invalid numeric values", static_cast<std::uint32_t>(subIndex));
+            if (value.type == 8)
+                addError(internal::validMorphOffsetOperation(value.type, value.offsets[subIndex]),
+                         "material morph operation is invalid", static_cast<std::uint32_t>(subIndex));
         }
     } else if (kind == ReferenceObjectKind::displayFrame) {
         const auto &value = model_.displayFrames[index];
