@@ -3,6 +3,7 @@
 #include <mmd/physics.hpp>
 #endif
 #include "log.hpp"
+#include "pmx_validation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -205,6 +206,11 @@ using BoneOrder = std::vector<std::size_t>;
 struct BoneOrders {
     BoneOrder beforePhysics;
     BoneOrder afterPhysics;
+};
+
+struct DirtyRebuildResult {
+    std::size_t updated{};
+    bool budgetExceeded{};
 };
 
 LocalPose sampleBone(const std::vector<const VmdBoneKey *> &keys, float frame,
@@ -497,14 +503,27 @@ void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector
 // Rebuild only a changed IK link and every transform that can depend on it.
 // Parent descendants need new globals, while append dependents need a new
 // local pose even when they are not children in the parent hierarchy.
-std::size_t rebuildDirtyBonePoses(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
-                                  std::vector<LocalPose> &localScratch, std::vector<GlobalPose> &globalScratch,
-                                  std::span<const std::size_t> parentOrder,
-                                  const std::vector<std::vector<std::size_t>> &children,
-                                  const std::vector<std::vector<std::size_t>> &inheritDependents, std::size_t root,
-                                  std::vector<std::uint8_t> &dirty, std::vector<std::size_t> &pending) {
-    std::fill(dirty.begin(), dirty.end(), std::uint8_t{0});
-    pending.clear();
+DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const std::size_t> phaseRank,
+                                         std::span<const std::size_t> parentRank, std::vector<BoneRuntimePose> &poses,
+                                         std::vector<LocalPose> &localScratch, std::vector<GlobalPose> &globalScratch,
+                                         const std::vector<std::vector<std::size_t>> &children,
+                                         const std::vector<std::vector<std::size_t>> &inheritDependents,
+                                         std::size_t root, std::vector<std::uint8_t> &dirty,
+                                         std::vector<std::size_t> &pending, std::vector<std::size_t> &dirtyNodes,
+                                         std::vector<std::size_t> &dirtyLocalOrder,
+                                         std::vector<std::size_t> &dirtyGlobalOrder, std::size_t maxUpdates) {
+    const auto clearDirty = [&]() {
+        for (const auto index : dirtyNodes)
+            dirty[index] = 0;
+        dirtyNodes.clear();
+        pending.clear();
+        dirtyLocalOrder.clear();
+        dirtyGlobalOrder.clear();
+    };
+    // Only nodes touched by the previous closure need resetting. Clearing the
+    // whole dirty vector here made every IK link pay an O(number of bones)
+    // cost even when its dependency closure contained one node.
+    clearDirty();
     pending.push_back(root);
     std::size_t count{};
     while (!pending.empty()) {
@@ -512,14 +531,30 @@ std::size_t rebuildDirtyBonePoses(const PmxModel &model, const BoneOrder &order,
         pending.pop_back();
         if (dirty[index] != 0)
             continue;
+        if (count == maxUpdates) {
+            clearDirty();
+            return {maxUpdates + 1U, true};
+        }
         dirty[index] = 1;
+        dirtyNodes.push_back(index);
         ++count;
         pending.insert(pending.end(), children[index].begin(), children[index].end());
         pending.insert(pending.end(), inheritDependents[index].begin(), inheritDependents[index].end());
     }
 
     const Quat identity{0.0F, 0.0F, 0.0F, 1.0F};
-    for (const auto index : order) {
+    dirtyLocalOrder = dirtyNodes;
+    std::ranges::sort(dirtyLocalOrder, [&](const auto left, const auto right) {
+        if (phaseRank[left] != phaseRank[right])
+            return phaseRank[left] < phaseRank[right];
+        return left < right;
+    });
+    for (const auto index : dirtyLocalOrder) {
+        // Keep the existing phase semantics: a rebuild requested from one
+        // phase does not rebuild a bone scheduled for the other phase's local
+        // pass. Its directly updated global pose is still refreshed below.
+        if (phaseRank[index] == phaseRank.size())
+            continue;
         if (dirty[index] == 0)
             continue;
         auto &pose = poses[index];
@@ -570,13 +605,17 @@ std::size_t rebuildDirtyBonePoses(const PmxModel &model, const BoneOrder &order,
         poses[index].global = globalScratch[index];
         dirty[index] = 2;
     };
-    for (const auto index : parentOrder)
+    dirtyGlobalOrder = dirtyNodes;
+    std::ranges::sort(dirtyGlobalOrder, [&](const auto left, const auto right) {
+        if (parentRank[left] != parentRank[right])
+            return parentRank[left] < parentRank[right];
+        return left < right;
+    });
+    for (const auto index : dirtyGlobalOrder)
         if (dirty[index] != 0)
-            calculate(index);
-    for (std::size_t index = 0; index < poses.size(); ++index)
-        if (dirty[index] == 1)
             calculate(index); // deterministic fallback for malformed parent cycles
-    return count;
+    clearDirty();
+    return {count, false};
 }
 
 const VmdIkKey *ikKeyAt(const VmdMotion *motion, float frame) {
@@ -612,13 +651,16 @@ bool ikEnabledAt(const VmdMotion *motion, std::string_view name, float frame) {
 
 void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRuntimePose> &poses,
              const VmdMotion *motion, float frame, std::vector<LocalPose> &localScratch,
-             std::vector<GlobalPose> &globalScratch, std::span<const std::size_t> parentOrder,
-             const std::vector<std::vector<std::size_t>> &children,
+             std::vector<GlobalPose> &globalScratch, std::span<const std::size_t> phaseRank,
+             std::span<const std::size_t> parentRank, const std::vector<std::vector<std::size_t>> &children,
              const std::vector<std::vector<std::size_t>> &inheritDependents, std::vector<std::uint8_t> &dirty,
-             std::vector<std::size_t> &pending, bool enabled) {
+             std::vector<std::size_t> &pending, std::vector<std::size_t> &dirtyNodes,
+             std::vector<std::size_t> &dirtyLocalOrder, std::vector<std::size_t> &dirtyGlobalOrder, bool enabled) {
     if (!enabled)
         return;
+    constexpr std::uint64_t maxIkLinkSteps = 1'000'000;
     constexpr std::uint64_t maxIkBoneUpdates = 1'000'000;
+    std::uint64_t linkSteps{};
     std::uint64_t boneUpdates{};
     bool budgetExceeded{};
     for (const auto ikIndex : order) {
@@ -631,6 +673,12 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
             for (const auto &link : ik.ikLinks) {
                 if (budgetExceeded)
                     break;
+                if (linkSteps >= maxIkLinkSteps) {
+                    budgetExceeded = true;
+                    log::warn("IK link evaluation budget exceeded");
+                    break;
+                }
+                ++linkSteps;
                 if (link.bone < 0 || static_cast<std::size_t>(link.bone) >= poses.size())
                     continue;
                 const auto linkIndex = static_cast<std::size_t>(link.bone);
@@ -658,6 +706,8 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
                                                 ? poses[static_cast<std::size_t>(parent)].global.rotation
                                                 : Quat{0.0F, 0.0F, 0.0F, 1.0F};
                 const auto localDelta = multiply(multiply(conjugate(parentRotation), worldDelta), parentRotation);
+                const auto previousIkRotation = poses[linkIndex].ikRotation;
+                const auto previousLocalRotation = poses[linkIndex].local.rotation;
                 poses[linkIndex].ikRotation = multiply(localDelta, poses[linkIndex].ikRotation);
                 // An IK link may belong to the other physics phase. Apply the
                 // accumulated IK rotation directly so a phase-local rebuild
@@ -669,12 +719,21 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
                     multiply(poses[linkIndex].local.rotation, conjugate(poses[linkIndex].withoutIk.rotation));
                 // Rebuild the current phase's append relationships while
                 // retaining the direct cross-phase link update above.
-                boneUpdates += rebuildDirtyBonePoses(model, order, poses, localScratch, globalScratch, parentOrder,
-                                                     children, inheritDependents, linkIndex, dirty, pending);
-                if (boneUpdates > maxIkBoneUpdates) {
+                const auto remainingBoneBudget = maxIkBoneUpdates - boneUpdates;
+                const auto rebuild =
+                    rebuildDirtyBonePoses(model, phaseRank, parentRank, poses, localScratch, globalScratch, children,
+                                          inheritDependents, linkIndex, dirty, pending, dirtyNodes, dirtyLocalOrder,
+                                          dirtyGlobalOrder, static_cast<std::size_t>(remainingBoneBudget));
+                if (rebuild.budgetExceeded) {
+                    // Do not leave a partially applied IK rotation with stale
+                    // global poses when the dirty-closure budget is exhausted.
+                    poses[linkIndex].ikRotation = previousIkRotation;
+                    poses[linkIndex].local.rotation = previousLocalRotation;
                     budgetExceeded = true;
-                    log::warn("IK evaluation budget exceeded");
+                    log::warn("IK bone update budget exceeded");
                 }
+                if (!rebuild.budgetExceeded)
+                    boneUpdates += rebuild.updated;
             }
             if (length(sub(poses[static_cast<std::size_t>(ik.ikTarget)].global.position,
                            poses[ikIndex].global.position)) < 1e-4F)
@@ -846,7 +905,7 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
                 return false;
             }
             if (offset.index < 0 || static_cast<std::size_t>(offset.index) >= model.morphs.size() ||
-                !std::isfinite(offset.scalar))
+                !internal::finiteMorphOffset(model.morphs[parent].type, offset))
                 continue;
             const auto child = static_cast<std::size_t>(offset.index);
             const bool childGroup = model.morphs[child].type == 0 || model.morphs[child].type == 9;
@@ -900,8 +959,14 @@ struct MmdAnimator::Impl {
     std::vector<std::vector<std::size_t>> boneChildren;
     std::vector<std::vector<std::size_t>> inheritDependents;
     std::vector<std::size_t> parentOrder;
+    std::vector<std::size_t> parentRank;
+    std::vector<std::size_t> beforePhysicsRank;
+    std::vector<std::size_t> afterPhysicsRank;
     std::vector<std::uint8_t> dirtyBones;
     std::vector<std::size_t> dirtyScratch;
+    std::vector<std::size_t> dirtyNodes;
+    std::vector<std::size_t> dirtyLocalOrder;
+    std::vector<std::size_t> dirtyGlobalOrder;
     std::vector<std::uint8_t> subtreeState;
     std::vector<std::size_t> subtreeScratch;
 };
@@ -936,8 +1001,21 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
         for (const auto child : impl_->boneChildren[impl_->parentOrder[cursor]])
             if (--indegree[child] == 0)
                 impl_->parentOrder.push_back(child);
+    const auto boneCount = model_.bones.size();
+    impl_->parentRank.assign(boneCount, boneCount);
+    impl_->beforePhysicsRank.assign(boneCount, boneCount);
+    impl_->afterPhysicsRank.assign(boneCount, boneCount);
+    for (std::size_t rank = 0; rank < impl_->parentOrder.size(); ++rank)
+        impl_->parentRank[impl_->parentOrder[rank]] = rank;
+    for (std::size_t rank = 0; rank < impl_->boneOrders.beforePhysics.size(); ++rank)
+        impl_->beforePhysicsRank[impl_->boneOrders.beforePhysics[rank]] = rank;
+    for (std::size_t rank = 0; rank < impl_->boneOrders.afterPhysics.size(); ++rank)
+        impl_->afterPhysicsRank[impl_->boneOrders.afterPhysics[rank]] = rank;
     impl_->subtreeScratch.reserve(model_.bones.size());
     impl_->dirtyScratch.reserve(model_.bones.size());
+    impl_->dirtyNodes.reserve(model_.bones.size());
+    impl_->dirtyLocalOrder.reserve(model_.bones.size());
+    impl_->dirtyGlobalOrder.reserve(model_.bones.size());
 }
 MmdAnimator::~MmdAnimator() = default;
 void MmdAnimator::setMotion(const VmdMotion *motion) {
@@ -1088,10 +1166,15 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             return;
         const auto &morph = model_.morphs[index];
         if (gpuSkinning && morph.type == 1) {
+            if (!std::ranges::all_of(
+                    morph.offsets, [&](const auto &offset) { return internal::finiteMorphOffset(morph.type, offset); }))
+                return;
             result.morphWeights[index] += weight;
             return;
         }
         for (const auto &offset : morph.offsets) {
+            if (!internal::finiteMorphOffset(morph.type, offset))
+                continue;
             if (morph.type == 1 && offset.index >= 0 &&
                 static_cast<std::size_t>(offset.index) < result.vertices.size()) {
                 result.vertices[static_cast<std::size_t>(offset.index)].position =
@@ -1183,7 +1266,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         if (override.index != MorphOverride::temporary || (override.type != 1U && override.type != 2U))
             continue;
         for (const auto &offset : override.offsets) {
-            if (offset.index < 0)
+            if (offset.index < 0 || !std::isfinite(override.weight) ||
+                !internal::finiteMorphOffset(override.type, offset))
                 continue;
             if (override.type == 1U) {
                 if (static_cast<std::size_t>(offset.index) < result.vertices.size())
@@ -1209,7 +1293,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.beforePhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.beforePhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones, impl_->dirtyScratch,
+            impl_->beforePhysicsRank, impl_->parentRank, impl_->boneChildren, impl_->inheritDependents,
+            impl_->dirtyBones, impl_->dirtyScratch, impl_->dirtyNodes, impl_->dirtyLocalOrder, impl_->dirtyGlobalOrder,
             ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i)
         local[i] = poses[i].local;
@@ -1332,7 +1417,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     rebuildBonePoses(model_, boneOrders.afterPhysics, poses, impl_->localScratch, impl_->globalScratch,
                      impl_->globalState, impl_->parentOrder);
     solveIk(model_, boneOrders.afterPhysics, poses, motion_, frame, impl_->localScratch, impl_->globalScratch,
-            impl_->parentOrder, impl_->boneChildren, impl_->inheritDependents, impl_->dirtyBones, impl_->dirtyScratch,
+            impl_->afterPhysicsRank, impl_->parentRank, impl_->boneChildren, impl_->inheritDependents,
+            impl_->dirtyBones, impl_->dirtyScratch, impl_->dirtyNodes, impl_->dirtyLocalOrder, impl_->dirtyGlobalOrder,
             ikEnabled_);
     for (std::size_t i = 0; i < local.size(); ++i) {
         local[i] = poses[i].local;

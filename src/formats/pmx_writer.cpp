@@ -1,3 +1,4 @@
+#include "pmx_validation.hpp"
 #include <mmd/pmx.hpp>
 
 #include <algorithm>
@@ -309,42 +310,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
             addIndexedError(result,
                             inRange(offset.index, count, morph.type != 1 && !(morph.type >= 3 && morph.type <= 7)),
                             "morph reference index is out of range", ReferenceObjectKind::morph, morphIndex);
-            bool valuesFinite = true;
-            switch (morph.type) {
-            case 0:
-            case 9:
-                valuesFinite = finite(offset.scalar);
-                break;
-            case 1:
-                valuesFinite = finite(offset.vector3);
-                break;
-            case 2:
-                valuesFinite = finite(offset.vector3) && finite(offset.vector4);
-                break;
-            case 3:
-            case 4:
-            case 5:
-            case 6:
-            case 7:
-                valuesFinite = finite(offset.vector4);
-                break;
-            case 8:
-                valuesFinite = finite(offset.materialVectors[0]) && finite(offset.materialVectors[1]) &&
-                               finite(offset.materialVectors[2]) && finite(offset.materialVectors[3]) &&
-                               finite(offset.materialVectors[4]) && finite(offset.materialVectors[5]) &&
-                               finite(offset.materialVectors[6]);
-                break;
-            case 10:
-                valuesFinite = finite(offset.vector3) && finite(offset.tertiaryVector3);
-                break;
-            default:
-                break;
-            }
-            addIndexedError(result, valuesFinite, "morph offset contains non-finite values", ReferenceObjectKind::morph,
-                            morphIndex);
-            if (morph.type == 8)
-                addIndexedError(result, offset.operation <= 1, "material morph operation is invalid",
-                                ReferenceObjectKind::morph, morphIndex);
+            addIndexedError(result, internal::finiteMorphOffset(morph.type, offset),
+                            "morph offset contains invalid numeric values", ReferenceObjectKind::morph, morphIndex);
         }
     }
     for (std::size_t frameIndex = 0; frameIndex < model.displayFrames.size(); ++frameIndex)
