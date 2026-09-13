@@ -664,12 +664,16 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
     std::uint64_t boneUpdates{};
     bool budgetExceeded{};
     for (const auto ikIndex : order) {
+        if (budgetExceeded)
+            break;
         const auto &ik = model.bones[ikIndex];
         if ((ik.flags & 0x0020U) == 0 || !std::isfinite(ik.ikLimitAngle) || ik.ikTarget < 0 ||
             static_cast<std::size_t>(ik.ikTarget) >= poses.size() || !ikEnabledAt(motion, ik.name, frame))
             continue;
         const int loops = std::clamp(ik.ikLoopCount, 0, 255);
         for (int loop = 0; loop < loops; ++loop) {
+            if (budgetExceeded)
+                break;
             for (const auto &link : ik.ikLinks) {
                 if (budgetExceeded)
                     break;
@@ -735,6 +739,8 @@ void solveIk(const PmxModel &model, const BoneOrder &order, std::vector<BoneRunt
                 if (!rebuild.budgetExceeded)
                     boneUpdates += rebuild.updated;
             }
+            if (budgetExceeded)
+                break;
             if (length(sub(poses[static_cast<std::size_t>(ik.ikTarget)].global.position,
                            poses[ikIndex].global.position)) < 1e-4F)
                 break;
