@@ -78,6 +78,21 @@ int main() {
     {
         mmd::PmxModel invalid;
         invalid.metadata.version = 2.1F;
+        invalid.materials.emplace_back();
+        invalid.morphs.push_back({.name = "material operation", .type = 8});
+        invalid.morphs[0].offsets.push_back({.index = 0, .operation = 2});
+        const auto validation = mmd::pmx::validate(invalid);
+        assert(!validation.valid());
+        assert(std::any_of(validation.issues.begin(), validation.issues.end(),
+                           [](const auto &issue) { return issue.message == "material morph operation is invalid"; }));
+        assert(std::none_of(validation.issues.begin(), validation.issues.end(), [](const auto &issue) {
+            return issue.message == "morph offset contains invalid numeric values";
+        }));
+    }
+
+    {
+        mmd::PmxModel invalid;
+        invalid.metadata.version = 2.1F;
         invalid.bones.push_back({.name = "bone"});
         invalid.morphs.push_back({.name = "bone", .type = 2});
         invalid.morphs[0].offsets.push_back(
