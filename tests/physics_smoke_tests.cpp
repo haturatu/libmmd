@@ -95,6 +95,11 @@ int main() {
     pose.bones.push_back({.name = "animated", .translation = {2.0F, 0.0F, 0.0F}});
     animator.setPose(&pose);
     static_cast<void>(animator.evaluate(0.0F, 0.0F));
+    const auto boundAfterPose = syncPhysics.bodyTransform(0);
+    if (std::abs(boundAfterPose.position[0] - 2.0F) > 1e-4F) {
+        std::printf("FAIL: pose replacement did not synchronize the bound body\n");
+        return 1;
+    }
     const auto unboundReset = syncPhysics.bodyTransform(1);
     if (std::abs(unboundReset.position[1] - unboundInitial.position[1]) > 1e-4F) {
         std::printf("FAIL: pose replacement did not reset unbound physics state\n");
