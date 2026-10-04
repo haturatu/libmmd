@@ -79,3 +79,21 @@ preserved when replacing an existing regular file. Replacement uses same-volume
 rename on POSIX and `MoveFileExW` on Windows, without a delete/copy fallback.
 Flush/close is not a guarantee of persistence through a power failure; file and
 directory fsync are not performed.
+
+### Editor pose snapshots
+
+`AnimatedModelFrame::BoneTransform` keeps its existing skinning `rotation` and
+`translation`. It also exposes the final solved `localTranslation`,
+`localRotation`, and `worldPosition` (PMX model space, before preview
+normalization), in both CPU and GPU skinning modes.
+
+`inputTranslation` and `inputRotation` describe the sampled VMD/VPD pose before
+morphs, append transforms, IK, and physics. Register these input values when
+editing motion keys, rather than baking solved deformation a second time.
+
+The optional fifth argument to `MmdAnimator::evaluate`, `BoneOverrides`, applies
+absolute transient input poses before runtime deformation. It does not mutate
+the model or motion. Invalid indices and nonfinite values are ignored; the last
+valid override wins. `physics = false` keeps that edited bone's animation pose
+instead of importing its simulated rigid-body transform. Omit the overrides to
+revert the preview.

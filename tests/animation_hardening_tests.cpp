@@ -9,6 +9,62 @@
 #include <span>
 
 int main() {
+    {
+        mmd::PmxModel poseModel;
+        poseModel.bones.resize(2);
+        poseModel.bones[0].name = "root";
+        poseModel.bones[0].position = {2.0F, 0.0F, 0.0F};
+        poseModel.bones[1].name = "child";
+        poseModel.bones[1].parent = 0;
+        poseModel.bones[1].position = {2.0F, 1.0F, 0.0F};
+        poseModel.vertices.resize(1);
+        poseModel.vertices[0].position = poseModel.bones[1].position;
+        poseModel.vertices[0].bones[0] = 1;
+        mmd::VmdMotion motion;
+        motion.bones.push_back({"root", 0, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F, 0.0F}});
+        motion.bones.push_back({"child", 0, {3.0F, 0.0F, 0.0F}});
+        poseModel.morphs.push_back(
+            {.name = "offset", .type = 2, .offsets = {{.index = 1, .vector3 = {0.0F, 2.0F, 0.0F}}}});
+        mmd::MmdAnimator animator(poseModel);
+        animator.setMotion(&motion);
+        const std::array overrides{mmd::MorphOverride{.index = 0, .weight = 1.0F}};
+        const auto cpu = animator.evaluate(0.0F, 0.0F, false, overrides);
+        const auto gpu = animator.evaluate(0.0F, 0.0F, true, overrides);
+        const auto &child = cpu.bones[1];
+        assert(child.inputTranslation == (mmd::Float3{3.0F, 0.0F, 0.0F}));
+        assert(child.localTranslation == (mmd::Float3{3.0F, 2.0F, 0.0F}));
+        assert(child.worldPosition == (mmd::Float3{-1.0F, -2.0F, 0.0F}));
+        assert(child.translation == (mmd::Float3{1.0F, -1.0F, 0.0F}));
+        assert(child.localRotation == (mmd::Float4{0.0F, 0.0F, 0.0F, 1.0F}));
+        assert(cpu.vertices[0].position == child.worldPosition);
+        assert(gpu.vertices[0].position == poseModel.vertices[0].position);
+        for (std::size_t index = 0; index < cpu.bones.size(); ++index) {
+            assert(cpu.bones[index].worldPosition == gpu.bones[index].worldPosition);
+            assert(cpu.bones[index].localRotation == gpu.bones[index].localRotation);
+            assert(cpu.bones[index].inputTranslation == gpu.bones[index].inputTranslation);
+        }
+        const std::array edits{mmd::BoneOverride{.index = 1, .translation = {4.0F, 0.0F, 0.0F}}};
+        const auto edited = animator.evaluate(0.0F, 0.0F, false, overrides, edits);
+        assert(edited.bones[1].localTranslation == (mmd::Float3{4.0F, 2.0F, 0.0F}));
+        assert(edited.bones[1].inputTranslation == motion.bones[1].translation);
+        assert(edited.bones[1].worldPosition == (mmd::Float3{-2.0F, -2.0F, 0.0F}));
+        const auto unedited = animator.evaluate(0.0F, 0.0F, false, overrides);
+        assert(unedited.bones[1].worldPosition == child.worldPosition);
+        const std::array invalidEdits{
+            mmd::BoneOverride{.index = 999},
+            mmd::BoneOverride{.index = 1, .translation = {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F}}};
+        const auto ignored = animator.evaluate(0.0F, 0.0F, false, overrides, invalidEdits);
+        assert(ignored.bones[1].worldPosition == child.worldPosition);
+        mmd::VpdPose pose;
+        pose.bones.push_back({"child", {1.0F, 0.0F, 0.0F}});
+        animator.setPose(&pose);
+        const auto posed = animator.evaluate(0.0F);
+        assert(posed.bones[1].inputTranslation == pose.bones[0].translation);
+        animator.setPose(nullptr);
+        const auto reverted = animator.evaluate(0.0F);
+        assert(reverted.bones[1].inputTranslation == motion.bones[1].translation);
+    }
+
     mmd::PmxModel model;
     model.morphs = {
         {.name = "root", .type = 0, .offsets = {{.index = 1, .scalar = 0.5F}, {.index = 2, .scalar = 2.0F}}},

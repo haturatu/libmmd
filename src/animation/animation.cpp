@@ -1159,7 +1159,8 @@ MotionCompatibility MmdAnimator::motionCompatibility() const {
     return result;
 }
 
-AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides) {
+AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides,
+                                         BoneOverrides boneOverrides) {
 #if !LIBMMD_ENABLE_PHYSICS
     static_cast<void>(deltaSeconds);
 #endif
@@ -1201,6 +1202,23 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 local[index].rotation = value.rotation;
             }
         }
+    }
+
+    result.bones.resize(local.size());
+    for (std::size_t index = 0; index < local.size(); ++index) {
+        result.bones[index].inputTranslation = local[index].translation;
+        result.bones[index].inputRotation = local[index].rotation;
+    }
+
+    std::vector<bool> physicsEnabled(local.size(), true);
+    for (const auto &override : boneOverrides) {
+        if (override.index >= local.size() ||
+            !std::ranges::all_of(override.translation, [](float value) { return std::isfinite(value); }) ||
+            !std::ranges::all_of(override.rotation, [](float value) { return std::isfinite(value); }))
+            continue;
+        local[override.index].translation = override.translation;
+        local[override.index].rotation = normalize(override.rotation);
+        physicsEnabled[override.index] = override.physics;
     }
 
     std::vector<float> morphWeights(model_.morphs.size());
@@ -1416,7 +1434,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         for (const auto bodyIndex : impl_->physicsBodyOrder) {
             const auto &body = model_.rigidBodies[bodyIndex];
             const auto mode = physics_->bodyMode(bodyIndex);
-            if (mode == 0)
+            if (mode == 0 || !physicsEnabled[static_cast<std::size_t>(body.bone)])
                 continue;
             const auto bone = static_cast<std::size_t>(body.bone);
             physicsBones[bone] = true;
@@ -1489,13 +1507,14 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     }
     previousFrame_ = frame;
 
-    result.bones.reserve(global.size());
     for (std::size_t index = 0; index < global.size(); ++index) {
-        AnimatedModelFrame::BoneTransform transform;
+        auto &transform = result.bones[index];
         transform.rotation = global[index].rotation;
         transform.translation =
             sub(global[index].position, rotate(global[index].rotation, model_.bones[index].position));
-        result.bones.push_back(transform);
+        transform.localTranslation = local[index].translation;
+        transform.localRotation = local[index].rotation;
+        transform.worldPosition = global[index].position;
     }
 
     for (auto &vertex : result.vertices) {
