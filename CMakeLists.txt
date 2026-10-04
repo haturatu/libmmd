@@ -42,6 +42,7 @@ add_library(
     src/formats/pmx_writer.cpp
     src/formats/vmd.cpp
     src/internal/mapped_file.cpp
+    src/internal/atomic_file_output.cpp
 )
 set_target_properties(mmd_core PROPERTIES EXPORT_NAME core)
 add_library(mmd::core ALIAS mmd_core)
@@ -194,6 +195,23 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
     )
     libmmd_enable_warnings(libmmd_document_hardening_tests)
     add_test(NAME document_hardening COMMAND libmmd_document_hardening_tests)
+    add_executable(
+        libmmd_serialization_hardening_tests
+        tests/serialization_hardening_tests.cpp
+    )
+    target_link_libraries(
+        libmmd_serialization_hardening_tests
+        PRIVATE mmd::core
+    )
+    target_include_directories(
+        libmmd_serialization_hardening_tests
+        PRIVATE src/internal
+    )
+    libmmd_enable_warnings(libmmd_serialization_hardening_tests)
+    add_test(
+        NAME serialization_hardening
+        COMMAND libmmd_serialization_hardening_tests
+    )
 
     if(LIBMMD_ENABLE_PHYSICS)
         add_executable(libmmd_physics_smoke_tests tests/physics_smoke_tests.cpp)

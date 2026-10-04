@@ -65,3 +65,17 @@ shape/mode/group and every floating-point field. Soft-body material, anchor and
 pinned-vertex references use the same checks in all three paths. Optional
 material and anchor rigid-body references retain the editor's `-1` convention;
 anchor and pinned vertices must be valid vertex indices.
+
+Serialization validation also rejects unknown text encodings, index widths
+outside 1/2/4 and unknown vertex weight types. Joint types follow the PMX
+version (2.0: 0; 2.1: 0–5), and all joint float arrays must be finite. Soft bodies
+validate shape 0/1, group 0–15, aero model 0–4 and every float field/array.
+
+`pmx::save()` writes into a private staging directory beside the destination,
+checks flush and close, then replaces the destination with the complete file.
+Validation, serialization and I/O failures before replacement leave the old
+file intact; staging files are cleaned up on exceptions. POSIX mode bits are
+preserved when replacing an existing regular file. Replacement uses same-volume
+rename on POSIX and `MoveFileExW` on Windows, without a delete/copy fallback.
+Flush/close is not a guarantee of persistence through a power failure; file and
+directory fsync are not performed.

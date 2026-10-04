@@ -1,3 +1,4 @@
+#include "atomic_file_output.hpp"
 #include "pmx_validation.hpp"
 #include <mmd/pmx.hpp>
 
@@ -5,7 +6,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -343,9 +343,14 @@ PmxSaveReport pmx::save(const std::filesystem::path &path, const PmxModel &model
     const auto validation = validate(model);
     if (!validation.valid())
         throw std::runtime_error("cannot save invalid PMX: " + validation.issues.front().message);
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output)
-        throw std::runtime_error("cannot open PMX for writing: " + path.string());
+    internal::AtomicFileOutput staged(path);
+    auto &output = staged.stream();
+    struct RestoreEncoding {
+        PmxTextEncoding previous;
+        ~RestoreEncoding() {
+            outputEncoding = previous;
+        }
+    } encodingScope{outputEncoding};
 
     output.write("PMX ", 4);
     const auto version = model.metadata.version;
@@ -589,7 +594,7 @@ PmxSaveReport pmx::save(const std::filesystem::path &path, const PmxModel &model
                 writeVertexIndex(output, static_cast<std::uint32_t>(vertex), widths.vertex, "soft body pin vertex");
         }
     }
-    outputEncoding = PmxTextEncoding::utf8;
+    staged.commit();
     return {.changedEncoding =
                 options.mode == PmxSaveMode::canonical && model.format.textEncoding != PmxTextEncoding::utf8,
             .vertex = {model.format.vertexIndexSize, widths.vertex},
