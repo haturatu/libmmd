@@ -286,12 +286,12 @@ LocalPose sampleBone(const std::vector<const VmdBoneKey *> &keys, float frame,
     return result;
 }
 
-LocalPose sampleBone(BoneTrack &track, const std::unordered_map<std::uint32_t, BezierLut> &luts, float frame,
-                     InterpolationMode fallbackMode = InterpolationMode::bezier) {
+LocalPose sampleBonePose(const BoneTrack &track, const std::unordered_map<std::uint32_t, BezierLut> &luts, float frame,
+                         std::size_t nextIndex, InterpolationMode fallbackMode) {
     const auto &keys = track.keys;
     if (keys.empty())
         return {};
-    const auto next = nextKey<VmdBoneKey>(track, frame);
+    const auto next = keys.begin() + static_cast<std::ptrdiff_t>(nextIndex);
     if (next == keys.begin())
         return {(*next)->translation, normalize((*next)->rotation)};
     if (next == keys.end())
@@ -299,7 +299,6 @@ LocalPose sampleBone(BoneTrack &track, const std::unordered_map<std::uint32_t, B
     const auto *before = *(next - 1);
     const auto *after = *next;
     const auto previousIndex = static_cast<std::size_t>((next - keys.begin()) - 1);
-    const auto nextIndex = static_cast<std::size_t>(next - keys.begin());
     const auto *previousControl = keys[previousIndex == 0 ? 0 : previousIndex - 1];
     const auto *nextControl = keys[std::min(nextIndex + 1, keys.size() - 1)];
     const float span = static_cast<float>(after->frame - before->frame);
@@ -363,14 +362,14 @@ struct SampledBoneInput {
 
 SampledBoneInput sampleBoneInput(BoneTrack &track, const std::unordered_map<std::uint32_t, BezierLut> &luts,
                                  float frame, InterpolationMode mode) {
-    const auto pose = sampleBone(track, luts, frame, mode);
     if (track.keys.empty())
-        return {pose, true};
-    // sampleBone leaves the cached cursor at the first key at/after frame.
-    const auto next = track.cursor;
-    const auto index = next >= track.keys.size()                                           ? track.keys.size() - 1
-                       : next == 0 || static_cast<float>(track.keys[next]->frame) == frame ? next
-                                                                                           : next - 1;
+        return {};
+    const auto next = static_cast<std::size_t>(nextKey<VmdBoneKey>(track, frame) - track.keys.begin());
+    const auto pose = sampleBonePose(track, luts, frame, next, mode);
+    const auto index = next >= track.keys.size()                             ? track.keys.size() - 1
+                       : next == 0                                           ? 0
+                       : frame < static_cast<float>(track.keys[next]->frame) ? next - 1
+                                                                             : next;
     return {pose, track.keys[index]->physics};
 }
 
@@ -1009,7 +1008,9 @@ struct MmdAnimator::Impl {
     std::vector<GlobalPose> globalScratch;
     std::vector<std::uint8_t> globalState;
     std::vector<std::uint8_t> physicsEnabled;
-    std::vector<std::optional<ExternalParentTransform>> externalDirect, externalInherited;
+    std::vector<std::optional<ExternalParentTransform>> externalDirect;
+    std::vector<std::optional<GlobalPose>> externalInherited;
+    std::vector<GlobalPose> externalOriginal;
     std::vector<std::uint8_t> externalProcessed;
     std::unordered_map<std::string_view, BoneTrack> boneTracks;
     std::unordered_map<std::string_view, MorphTrack> morphTracks;
@@ -1539,14 +1540,16 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         auto &direct = impl_->externalDirect;
         auto &inherited = impl_->externalInherited;
         auto &processed = impl_->externalProcessed;
+        auto &original = impl_->externalOriginal;
+        original.assign(global.begin(), global.end());
         direct.assign(global.size(), std::nullopt);
         inherited.assign(global.size(), std::nullopt);
         processed.assign(global.size(), std::uint8_t{0});
         for (auto parent : externalParents) {
-            if (parent.index >= global.size() || !finite(parent.translation) || !finite(parent.rotation))
+            if (parent.childBone >= global.size() || !finite(parent.parentPosition) || !finite(parent.parentRotation))
                 continue;
-            parent.rotation = normalize(parent.rotation);
-            direct[parent.index] = parent;
+            parent.parentRotation = normalize(parent.parentRotation);
+            direct[parent.childBone] = parent;
         }
         const auto apply = [&](std::size_t index) {
             const auto parent = model_.bones[index].parent;
@@ -1554,18 +1557,23 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 processed[static_cast<std::size_t>(parent)] != 0)
                 inherited[index] = inherited[static_cast<std::size_t>(parent)];
             if (direct[index]) {
-                if (inherited[index]) {
-                    inherited[index] = ExternalParentTransform{
-                        index,
-                        add(rotate(direct[index]->rotation, inherited[index]->translation), direct[index]->translation),
-                        normalize(multiply(direct[index]->rotation, inherited[index]->rotation))};
-                } else
-                    inherited[index] = direct[index];
+                // Only an already-processed PMX parent participated in the
+                // deterministic hierarchy solve (including malformed cycles).
+                GlobalPose originalParent;
+                if (parent >= 0 && static_cast<std::size_t>(parent) < original.size() &&
+                    processed[static_cast<std::size_t>(parent)] != 0)
+                    originalParent = original[static_cast<std::size_t>(parent)];
+                const auto &replacement = *direct[index];
+                const auto rotation =
+                    normalize(multiply(replacement.parentRotation, conjugate(originalParent.rotation)));
+                inherited[index] =
+                    GlobalPose{sub(replacement.parentPosition, rotate(rotation, originalParent.position)), rotation};
             }
             if (inherited[index]) {
-                const auto &transform = *inherited[index];
-                global[index].position = add(rotate(transform.rotation, global[index].position), transform.translation);
-                global[index].rotation = normalize(multiply(transform.rotation, global[index].rotation));
+                const auto &correction = *inherited[index];
+                global[index].position =
+                    add(rotate(correction.rotation, original[index].position), correction.position);
+                global[index].rotation = normalize(multiply(correction.rotation, original[index].rotation));
             }
             processed[index] = 1;
         };

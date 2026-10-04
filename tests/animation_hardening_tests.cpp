@@ -49,6 +49,35 @@ int main() {
         assert(animator.evaluate(5).bones[0].inputPhysics);
     }
     {
+        mmd::PmxModel model;
+        model.bones.resize(3);
+        model.bones[0].name = "root";
+        model.bones[1].parent = 0;
+        model.bones[1].position = {0, 2, 0};
+        model.bones[2].parent = 1;
+        model.bones[2].position = {0, 3, 0};
+        mmd::VmdMotion motion;
+        motion.bones.push_back({.name = "root", .translation = {5, 0, 0}});
+        mmd::MmdAnimator animator(model);
+        animator.setMotion(&motion);
+        const std::array parents{mmd::ExternalParentTransform{.childBone = 1, .parentPosition = {10, 0, 0}}};
+        const auto cpu = animator.evaluate(0, 0, false, {}, {}, parents);
+        const auto gpu = animator.evaluate(0, 0, true, {}, {}, parents);
+        assert(near(cpu.bones[0].worldPosition, mmd::Float3{5, 0, 0}));
+        assert(near(cpu.bones[1].worldPosition, mmd::Float3{10, 2, 0}));
+        assert(near(cpu.bones[2].worldPosition, mmd::Float3{10, 3, 0}));
+        assert(near(gpu.bones[2].worldPosition, cpu.bones[2].worldPosition));
+        const std::array nested{parents[0], mmd::ExternalParentTransform{.childBone = 2, .parentPosition = {20, 0, 0}}};
+        assert(near(animator.evaluate(0, 0, false, {}, {}, nested).bones[2].worldPosition, mmd::Float3{20, 1, 0}));
+        // Both parent rotations and a non-origin bind offset participate in replacement.
+        motion.bones[0].rotation = {0, 0, 1, 0};
+        animator.setMotion(&motion);
+        assert(near(animator.evaluate(0, 0, false, {}, {}, parents).bones[1].worldPosition, mmd::Float3{10, 2, 0}));
+        const std::array rotated{
+            mmd::ExternalParentTransform{.childBone = 1, .parentPosition = {10, 0, 0}, .parentRotation = {0, 0, 1, 0}}};
+        assert(near(animator.evaluate(0, 0, false, {}, {}, rotated).bones[1].worldPosition, mmd::Float3{10, -2, 0}));
+    }
+    {
         mmd::PmxModel broken;
         broken.bones.resize(2);
         broken.bones[0].parent = 1;
@@ -57,7 +86,7 @@ int main() {
         broken.bones[1].position = {2, 1, 0};
         mmd::MmdAnimator animator(broken);
         const auto original = animator.evaluate(0);
-        const std::array parent{mmd::ExternalParentTransform{.index = 0, .translation = {10, 0, 0}}};
+        const std::array parent{mmd::ExternalParentTransform{.childBone = 0, .parentPosition = {10, 0, 0}}};
         const auto attached = animator.evaluate(0, 0, false, {}, {}, parent);
         const auto gpu = animator.evaluate(0, 0, true, {}, {}, parent);
         for (std::size_t index = 0; index < original.bones.size(); ++index) {
@@ -67,11 +96,10 @@ int main() {
             assert(near(gpu.bones[index].worldPosition, expected));
         }
         // Unprocessed cyclic parents do not retroactively affect the root fallback.
-        const std::array child{mmd::ExternalParentTransform{.index = 1, .translation = {0, 4, 0}}};
+        const std::array child{mmd::ExternalParentTransform{.childBone = 1, .parentPosition = {0, 4, 0}}};
         const auto childAttached = animator.evaluate(0, 0, false, {}, {}, child);
         assert(near(childAttached.bones[0].worldPosition, original.bones[0].worldPosition));
-        auto expectedChild = original.bones[1].worldPosition;
-        expectedChild[1] += 4;
+        const mmd::Float3 expectedChild{0, 5, 0};
         assert(near(childAttached.bones[1].worldPosition, expectedChild));
         const auto detached = animator.evaluate(0);
         assert(near(detached.bones[0].worldPosition, original.bones[0].worldPosition));
@@ -122,7 +150,7 @@ int main() {
             mmd::BoneOverride{.index = 1, .translation = {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F}}};
         const auto ignored = animator.evaluate(0.0F, 0.0F, false, overrides, invalidEdits);
         assert(near(ignored.bones[1].worldPosition, child.worldPosition));
-        const std::array parents{mmd::ExternalParentTransform{.index = 0, .translation = {10, 0, 0}}};
+        const std::array parents{mmd::ExternalParentTransform{.childBone = 0, .parentPosition = {10, 0, 0}}};
         const auto attached = animator.evaluate(0, 0, false, overrides, {}, parents);
         const auto attachedGpu = animator.evaluate(0, 0, true, overrides, {}, parents);
         assert(near(attached.bones[1].worldPosition[0], child.worldPosition[0] + 10));

@@ -131,13 +131,15 @@ struct BoneOverride {
 };
 using BoneOverrides = std::span<const BoneOverride>;
 
-// Affine model-space parent transform applied after local IK/physics solving
-// and before skinning. Descendants inherit it; local authoring inputs remain
-// unchanged. Repeated entries for one bone use the last valid transform.
+// Replacement parent world pose in PMX model space, applied after local
+// IK/physics solving and before skinning. Removes the original parent pose
+// while preserving the solved child-relative pose. Descendants inherit the
+// correction; a nested attachment replaces it. Authoring inputs remain unchanged.
+// Repeated entries for one child use the last valid parent pose.
 struct ExternalParentTransform {
-    std::size_t index{};
-    Float3 translation{};
-    Float4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
+    std::size_t childBone{};
+    Float3 parentPosition{};
+    Float4 parentRotation{0.0F, 0.0F, 0.0F, 1.0F};
 };
 using ExternalParentTransforms = std::span<const ExternalParentTransform>;
 
