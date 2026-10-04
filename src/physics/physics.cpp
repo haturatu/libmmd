@@ -225,6 +225,25 @@ MmdPhysics::MmdPhysics(const PmxModel &model) : impl_(std::make_unique<Impl>()) 
         const short mask = static_cast<short>(source.collisionMask);
         impl_->world->addRigidBody(impl_->bodies.back().get(), group, mask);
     }
+    // Use sanitized runtime modes, so disabled/invalid parent bodies do not
+    // turn a standalone mode 2 into a fully simulated bone. Snapshot before
+    // normalization makes this independent of rigid-body array ordering.
+    std::vector<bool> dynamicBones(model.bones.size());
+    for (std::size_t index = 0; index < model.rigidBodies.size(); ++index) {
+        const auto bone = model.rigidBodies[index].bone;
+        if ((impl_->modes[index] == 1 || impl_->modes[index] == 2) && bone >= 0 &&
+            static_cast<std::size_t>(bone) < dynamicBones.size())
+            dynamicBones[static_cast<std::size_t>(bone)] = true;
+    }
+    for (std::size_t index = 0; index < model.rigidBodies.size(); ++index) {
+        const auto bone = model.rigidBodies[index].bone;
+        if (impl_->modes[index] != 2 || bone < 0 || static_cast<std::size_t>(bone) >= model.bones.size())
+            continue;
+        const auto parent = model.bones[static_cast<std::size_t>(bone)].parent;
+        if (parent >= 0 && parent != bone && static_cast<std::size_t>(parent) < dynamicBones.size() &&
+            dynamicBones[static_cast<std::size_t>(parent)])
+            impl_->modes[index] = 1;
+    }
     impl_->constraints.reserve(model.joints.size());
     for (const auto &source : model.joints) {
         if (!source.physicsEnabled || source.type != 0 || source.bodyA < 0 || source.bodyB < 0 ||

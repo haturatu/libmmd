@@ -1401,11 +1401,21 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             }
         }
         physics_->step(physicsDelta);
-        for (std::size_t bodyIndex = 0; bodyIndex < model_.rigidBodies.size(); ++bodyIndex) {
+        // Apply parents first even when the PMX rigid-body array lists children
+        // first. Otherwise a later parent update moves an already solved child.
+        std::vector<std::size_t> dynamicBodies;
+        for (std::size_t index = 0; index < model_.rigidBodies.size(); ++index) {
+            const auto bone = model_.rigidBodies[index].bone;
+            if (physics_->bodyMode(index) != 0 && bone >= 0 && static_cast<std::size_t>(bone) < global.size())
+                dynamicBodies.push_back(index);
+        }
+        std::stable_sort(dynamicBodies.begin(), dynamicBodies.end(), [&](std::size_t a, std::size_t b) {
+            return impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[a].bone)] <
+                   impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[b].bone)];
+        });
+        for (const auto bodyIndex : dynamicBodies) {
             const auto &body = model_.rigidBodies[bodyIndex];
             const auto mode = physics_->bodyMode(bodyIndex);
-            if (mode == 0 || body.bone < 0 || static_cast<std::size_t>(body.bone) >= global.size())
-                continue;
             const auto bone = static_cast<std::size_t>(body.bone);
             physicsBones[bone] = true;
             const auto bodyPose = physics_->bodyTransform(bodyIndex);
@@ -1416,7 +1426,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             // imports only the simulated rotation; its global translation
             // remains at the animated pre-physics position regardless of the
             // rigid body's bind offset. Use the snapshot because global[bone]
-            // may already contain a physics-updated mode 2 ancestor.
+            // may already contain a physics-updated ancestor. Nested mode 2
+            // bodies report effective mode 1 and follow the collision solution.
             Float3 targetBonePosition;
             if (mode == 2)
                 targetBonePosition = animatedBonePositions[bone];
