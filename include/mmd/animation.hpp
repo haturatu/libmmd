@@ -114,6 +114,9 @@ class MmdAnimator {
     ~MmdAnimator();
 
     void setMotion(const VmdMotion *motion);
+    // VPD replaces the VMD local translation/rotation of matching bones.
+    // Unspecified bones and morph tracks retain their motion; nullptr removes
+    // the override. Replacing/removing the pose resynchronizes physics.
     void setPose(const VpdPose *pose);
     void setPhysics(MmdPhysics *physics);
     void setIkEnabled(bool enabled) noexcept;

@@ -14,9 +14,29 @@ struct PhysicsTransform {
     Float4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
 };
 
+// Default preserves Bullet's constraint settings. The MMD preset applies the
+// 2.75-style 6DoF lever arm, frame handling and limit error correction.
+struct PhysicsCompatibilityProfile {
+    float constraintForceMixing{};
+    bool useFrameOffset{true};
+    float stopErp{0.2F};
+    bool useBullet275Constraint{false};
+
+    [[nodiscard]] static PhysicsCompatibilityProfile mmd275Compatible() noexcept {
+        return {0.00001F, false, 0.475F, true};
+    }
+};
+
+struct PhysicsSettings {
+    PhysicsCompatibilityProfile compatibility{};
+    int solverIterations{10};
+    float fixedTimeStep{1.0F / 120.0F};
+};
+
 class MmdPhysics {
   public:
     explicit MmdPhysics(const PmxModel &model);
+    MmdPhysics(const PmxModel &model, const PhysicsSettings &settings);
     ~MmdPhysics();
     MmdPhysics(MmdPhysics &&) noexcept;
     MmdPhysics &operator=(MmdPhysics &&) noexcept;
@@ -26,6 +46,7 @@ class MmdPhysics {
     [[nodiscard]] bool available() const noexcept;
     [[nodiscard]] std::size_t bodyCount() const noexcept;
     [[nodiscard]] std::size_t jointCount() const noexcept;
+    // Effective runtime mode; nested mode 2 bodies may report mode 1.
     [[nodiscard]] std::uint8_t bodyMode(std::size_t body) const noexcept;
     void reset();
     void step(float deltaSeconds);
