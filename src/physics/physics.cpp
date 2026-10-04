@@ -24,6 +24,11 @@ bool finiteVector(const Float3 &value) {
 struct MmdPhysics::Impl {
     PhysicsSettings settings;
 #if LIBMMD_HAS_BULLET
+    void createRigidBodies(const PmxModel &model);
+    [[nodiscard]] bool usableJoint(const PmxJoint &joint) const;
+    void normalizeRuntimeModes(const PmxModel &model);
+    void createConstraints(const PmxModel &model);
+
     std::unique_ptr<btDefaultCollisionConfiguration> collisionConfiguration;
     std::unique_ptr<btCollisionDispatcher> dispatcher;
     std::unique_ptr<btDbvtBroadphase> broadphase;
@@ -109,6 +114,192 @@ PhysicsTransform transform(const btTransform &value) {
 } // namespace
 #endif
 
+#if LIBMMD_HAS_BULLET
+void MmdPhysics::Impl::createRigidBodies(const PmxModel &model) {
+    shapes.reserve(model.rigidBodies.size());
+    motionStates.reserve(model.rigidBodies.size());
+    bodies.reserve(model.rigidBodies.size());
+    initialTransforms.reserve(model.rigidBodies.size());
+    kinematicStarts.reserve(model.rigidBodies.size());
+    kinematicTargets.reserve(model.rigidBodies.size());
+    kinematicDirty.reserve(model.rigidBodies.size());
+    modes.reserve(model.rigidBodies.size());
+    constraintEndpointsUsable.reserve(model.rigidBodies.size());
+    for (const auto &source : model.rigidBodies) {
+        const auto validDimension = [](float value) { return std::isfinite(value) && std::abs(value) >= 0.001F; };
+        bool invalidShape = !source.physicsEnabled;
+        if (!invalidShape) {
+            switch (source.shape) {
+            case 0:
+                invalidShape = !validDimension(source.size[0]);
+                if (!invalidShape)
+                    shapes.push_back(std::make_unique<btSphereShape>(std::abs(source.size[0])));
+                break;
+            case 1:
+                invalidShape = !validDimension(source.size[0]) || !validDimension(source.size[1]) ||
+                               !validDimension(source.size[2]);
+                if (!invalidShape) {
+                    const Float3 boxSize{std::abs(source.size[0]), std::abs(source.size[1]), std::abs(source.size[2])};
+                    shapes.push_back(std::make_unique<btBoxShape>(vector(boxSize)));
+                }
+                break;
+            case 2:
+                invalidShape = !validDimension(source.size[0]) || !validDimension(source.size[1]);
+                if (!invalidShape)
+                    shapes.push_back(
+                        std::make_unique<btCapsuleShape>(std::abs(source.size[0]), std::abs(source.size[1])));
+                break;
+            default:
+                invalidShape = true;
+                break;
+            }
+        }
+        if (invalidShape)
+            shapes.push_back(std::make_unique<btEmptyShape>());
+        // Upstream MikuMikuDayo sets an explicit 0.01 margin on every rigid
+        // shape instead of relying on the Bullet default.
+        shapes.back()->setMargin(0.01F);
+        const bool invalidTransform = !finite(source.position) || !finite(source.rotation);
+        const auto initial =
+            invalidTransform ? btTransform::getIdentity() : transform(source.position, source.rotation);
+        initialTransforms.push_back(initial);
+        kinematicStarts.push_back(initial);
+        kinematicTargets.push_back(initial);
+        kinematicDirty.push_back(0);
+        motionStates.push_back(std::make_unique<btDefaultMotionState>(initial));
+        // Some otherwise valid MMD models contain decorative rigid bodies with
+        // invalid collision geometry. Bullet's btEmptyShape cannot compute
+        // dynamic inertia, so keep those bodies as static placeholders. This
+        // preserves the PMX body index mapping while avoiding an assertion in
+        // btEmptyShape::calculateLocalInertia().
+        const bool invalidMass = !std::isfinite(source.mass) || source.mass <= 0.0F;
+        const btScalar candidateMass = (source.mode == 0 || invalidShape || invalidMass) ? 0.0F : source.mass;
+        btVector3 inertia;
+        inertia.setZero();
+        if (candidateMass > 0.0F)
+            shapes.back()->calculateLocalInertia(candidateMass, inertia);
+        const bool unusableDynamicBody =
+            candidateMass > 0.0F && (!std::isfinite(inertia.x()) || !std::isfinite(inertia.y()) ||
+                                     !std::isfinite(inertia.z()) || inertia.length2() <= SIMD_EPSILON * SIMD_EPSILON);
+        const bool dynamicUsable = candidateMass > 0.0F && !unusableDynamicBody && !invalidTransform;
+        const bool constraintEndpointUsable = source.physicsEnabled && !invalidShape && !invalidTransform &&
+                                              (source.mode == 0 || (dynamicUsable && !invalidMass));
+        const btScalar effectiveMass = dynamicUsable ? candidateMass : 0.0F;
+        const auto effectiveMode = dynamicUsable ? source.mode : std::uint8_t{0};
+        if (!dynamicUsable)
+            inertia.setZero();
+        btRigidBody::btRigidBodyConstructionInfo info(effectiveMass, motionStates.back().get(), shapes.back().get(),
+                                                      inertia);
+        info.m_linearDamping = source.linearDamping;
+        info.m_angularDamping = source.angularDamping;
+        info.m_additionalDamping = true;
+        info.m_restitution = source.restitution;
+        info.m_friction = source.friction;
+        bodies.push_back(std::make_unique<btRigidBody>(info));
+        modes.push_back(effectiveMode);
+        constraintEndpointsUsable.push_back(constraintEndpointUsable ? 1U : 0U);
+        bodies.back()->setSleepingThresholds(0.01F, 0.1F * std::numbers::pi_v<float> / 180.0F);
+        bodies.back()->setActivationState(DISABLE_DEACTIVATION);
+        if (effectiveMode == 0) {
+            bodies.back()->setCollisionFlags(bodies.back()->getCollisionFlags() |
+                                             btCollisionObject::CF_KINEMATIC_OBJECT);
+        }
+        const short group = static_cast<short>(1U << std::min<std::uint8_t>(source.group, 15));
+        // Pass the PMX mask to Bullet unchanged, matching upstream
+        // MikuMikuDayo (groupMask = r.passGroup). Real models are authored
+        // for this convention: e.g. Tda-style legs use group 0 / mask
+        // 0xffff (collide with everything) while skirt panels use groups
+        // 14-15 / mask 0x3fff (collide with the body, not each other).
+        // Inverting the mask here used to leave legs colliding with nothing
+        // while enabling skirt self-collision instead.
+        const short mask = static_cast<short>(source.collisionMask);
+        world->addRigidBody(bodies.back().get(), group, mask);
+    }
+}
+
+bool MmdPhysics::Impl::usableJoint(const PmxJoint &source) const {
+    if (!source.physicsEnabled || source.type != 0 || source.bodyA < 0 || source.bodyB < 0 ||
+        source.bodyA == source.bodyB || static_cast<std::size_t>(source.bodyA) >= bodies.size() ||
+        static_cast<std::size_t>(source.bodyB) >= bodies.size())
+        return false;
+    const auto a = static_cast<std::size_t>(source.bodyA);
+    const auto b = static_cast<std::size_t>(source.bodyB);
+    if (constraintEndpointsUsable[a] == 0 || constraintEndpointsUsable[b] == 0 ||
+        (bodies[a]->getInvMass() <= 0.0F && bodies[b]->getInvMass() <= 0.0F))
+        return false;
+    return finite(source.position) && finite(source.rotation) && finite(source.translationMinimum) &&
+           finite(source.translationMaximum) && finite(source.rotationMinimum) && finite(source.rotationMaximum) &&
+           finite(source.translationSpring) && finite(source.rotationSpring);
+}
+
+void MmdPhysics::Impl::normalizeRuntimeModes(const PmxModel &model) {
+    // Only a usable joint connecting directly related bones establishes a
+    // physics chain. Unrelated auxiliary bodies on the parent bone must not
+    // change a child's mode 2 animated translation semantics.
+    const auto normalize = [&](std::size_t parentBody, std::size_t childBody) {
+        const auto parentBone = model.rigidBodies[parentBody].bone;
+        const auto childBone = model.rigidBodies[childBody].bone;
+        if ((modes[parentBody] == 1 || modes[parentBody] == 2) && modes[childBody] == 2 && parentBone >= 0 &&
+            childBone >= 0 && parentBone != childBone && static_cast<std::size_t>(parentBone) < model.bones.size() &&
+            static_cast<std::size_t>(childBone) < model.bones.size() &&
+            model.bones[static_cast<std::size_t>(childBone)].parent == parentBone)
+            modes[childBody] = 1;
+    };
+    for (const auto &joint : model.joints) {
+        if (!usableJoint(joint))
+            continue;
+        const auto a = static_cast<std::size_t>(joint.bodyA);
+        const auto b = static_cast<std::size_t>(joint.bodyB);
+        normalize(a, b);
+        normalize(b, a);
+    }
+}
+
+void MmdPhysics::Impl::createConstraints(const PmxModel &model) {
+    const auto &profile = settings.compatibility;
+    constraints.reserve(model.joints.size());
+    for (const auto &source : model.joints) {
+        if (!usableJoint(source))
+            continue;
+        const auto bodyAIndex = static_cast<std::size_t>(source.bodyA);
+        const auto bodyBIndex = static_cast<std::size_t>(source.bodyB);
+        const auto &bodyA = bodies[bodyAIndex];
+        const auto &bodyB = bodies[bodyBIndex];
+        const auto jointWorld = transform(source.position, source.rotation);
+        const auto frameA = initialTransforms[bodyAIndex].inverse() * jointWorld;
+        const auto frameB = initialTransforms[bodyBIndex].inverse() * jointWorld;
+        std::unique_ptr<btGeneric6DofSpringConstraint> joint;
+        if (profile.useBullet275Constraint)
+            joint = std::make_unique<internal::Bullet275SpringConstraint>(*bodyA, *bodyB, frameA, frameB, true);
+        else
+            joint = std::make_unique<btGeneric6DofSpringConstraint>(*bodyA, *bodyB, frameA, frameB, true);
+        joint->setUseFrameOffset(profile.useFrameOffset);
+        for (int axis = 0; axis < 6; ++axis)
+            joint->setParam(BT_CONSTRAINT_STOP_ERP, profile.stopErp, axis);
+        joint->setLinearLowerLimit(vector(source.translationMinimum));
+        joint->setLinearUpperLimit(vector(source.translationMaximum));
+        joint->setAngularLowerLimit(vector(source.rotationMinimum));
+        joint->setAngularUpperLimit(vector(source.rotationMaximum));
+        for (int axis = 0; axis < 3; ++axis) {
+            if (source.translationSpring[static_cast<std::size_t>(axis)] > 0.0F) {
+                joint->enableSpring(axis, true);
+                joint->setStiffness(axis, source.translationSpring[static_cast<std::size_t>(axis)]);
+            }
+            if (source.rotationSpring[static_cast<std::size_t>(axis)] > 0.0F) {
+                joint->enableSpring(axis + 3, true);
+                joint->setStiffness(axis + 3, source.rotationSpring[static_cast<std::size_t>(axis)]);
+            }
+        }
+        joint->setEquilibriumPoint();
+        // Upstream adds the constraint without disabling collision between
+        // the linked bodies, so joint-connected pairs (e.g. hip to top
+        // skirt row) still collide subject to their masks.
+        world->addConstraint(joint.get());
+        constraints.push_back(std::move(joint));
+    }
+}
+#endif
+
 MmdPhysics::MmdPhysics(const PmxModel &model) : MmdPhysics(model, PhysicsSettings{}) {}
 
 MmdPhysics::MmdPhysics(const PmxModel &model, const PhysicsSettings &settings) : impl_(std::make_unique<Impl>()) {
@@ -140,176 +331,9 @@ MmdPhysics::MmdPhysics(const PmxModel &model, const PhysicsSettings &settings) :
     impl_->world->setGravity(vector(impl_->gravity));
     impl_->world->getSolverInfo().m_numIterations = settings.solverIterations;
     impl_->world->getSolverInfo().m_globalCfm = profile.constraintForceMixing;
-    impl_->shapes.reserve(model.rigidBodies.size());
-    impl_->motionStates.reserve(model.rigidBodies.size());
-    impl_->bodies.reserve(model.rigidBodies.size());
-    impl_->initialTransforms.reserve(model.rigidBodies.size());
-    impl_->kinematicStarts.reserve(model.rigidBodies.size());
-    impl_->kinematicTargets.reserve(model.rigidBodies.size());
-    impl_->kinematicDirty.reserve(model.rigidBodies.size());
-    impl_->modes.reserve(model.rigidBodies.size());
-    impl_->constraintEndpointsUsable.reserve(model.rigidBodies.size());
-    for (const auto &source : model.rigidBodies) {
-        const auto validDimension = [](float value) { return std::isfinite(value) && std::abs(value) >= 0.001F; };
-        bool invalidShape = !source.physicsEnabled;
-        if (!invalidShape) {
-            switch (source.shape) {
-            case 0:
-                invalidShape = !validDimension(source.size[0]);
-                if (!invalidShape)
-                    impl_->shapes.push_back(std::make_unique<btSphereShape>(std::abs(source.size[0])));
-                break;
-            case 1:
-                invalidShape = !validDimension(source.size[0]) || !validDimension(source.size[1]) ||
-                               !validDimension(source.size[2]);
-                if (!invalidShape) {
-                    const Float3 boxSize{std::abs(source.size[0]), std::abs(source.size[1]), std::abs(source.size[2])};
-                    impl_->shapes.push_back(std::make_unique<btBoxShape>(vector(boxSize)));
-                }
-                break;
-            case 2:
-                invalidShape = !validDimension(source.size[0]) || !validDimension(source.size[1]);
-                if (!invalidShape)
-                    impl_->shapes.push_back(
-                        std::make_unique<btCapsuleShape>(std::abs(source.size[0]), std::abs(source.size[1])));
-                break;
-            default:
-                invalidShape = true;
-                break;
-            }
-        }
-        if (invalidShape)
-            impl_->shapes.push_back(std::make_unique<btEmptyShape>());
-        // Upstream MikuMikuDayo sets an explicit 0.01 margin on every rigid
-        // shape instead of relying on the Bullet default.
-        impl_->shapes.back()->setMargin(0.01F);
-        const bool invalidTransform = !finite(source.position) || !finite(source.rotation);
-        const auto initial =
-            invalidTransform ? btTransform::getIdentity() : transform(source.position, source.rotation);
-        impl_->initialTransforms.push_back(initial);
-        impl_->kinematicStarts.push_back(initial);
-        impl_->kinematicTargets.push_back(initial);
-        impl_->kinematicDirty.push_back(0);
-        impl_->motionStates.push_back(std::make_unique<btDefaultMotionState>(initial));
-        // Some otherwise valid MMD models contain decorative rigid bodies with
-        // invalid collision geometry. Bullet's btEmptyShape cannot compute
-        // dynamic inertia, so keep those bodies as static placeholders. This
-        // preserves the PMX body index mapping while avoiding an assertion in
-        // btEmptyShape::calculateLocalInertia().
-        const bool invalidMass = !std::isfinite(source.mass) || source.mass <= 0.0F;
-        const btScalar candidateMass = (source.mode == 0 || invalidShape || invalidMass) ? 0.0F : source.mass;
-        btVector3 inertia;
-        inertia.setZero();
-        if (candidateMass > 0.0F)
-            impl_->shapes.back()->calculateLocalInertia(candidateMass, inertia);
-        const bool unusableDynamicBody =
-            candidateMass > 0.0F && (!std::isfinite(inertia.x()) || !std::isfinite(inertia.y()) ||
-                                     !std::isfinite(inertia.z()) || inertia.length2() <= SIMD_EPSILON * SIMD_EPSILON);
-        const bool dynamicUsable = candidateMass > 0.0F && !unusableDynamicBody && !invalidTransform;
-        const bool constraintEndpointUsable = source.physicsEnabled && !invalidShape && !invalidTransform &&
-                                              (source.mode == 0 || (dynamicUsable && !invalidMass));
-        const btScalar effectiveMass = dynamicUsable ? candidateMass : 0.0F;
-        const auto effectiveMode = dynamicUsable ? source.mode : std::uint8_t{0};
-        if (!dynamicUsable)
-            inertia.setZero();
-        btRigidBody::btRigidBodyConstructionInfo info(effectiveMass, impl_->motionStates.back().get(),
-                                                      impl_->shapes.back().get(), inertia);
-        info.m_linearDamping = source.linearDamping;
-        info.m_angularDamping = source.angularDamping;
-        info.m_additionalDamping = true;
-        info.m_restitution = source.restitution;
-        info.m_friction = source.friction;
-        impl_->bodies.push_back(std::make_unique<btRigidBody>(info));
-        impl_->modes.push_back(effectiveMode);
-        impl_->constraintEndpointsUsable.push_back(constraintEndpointUsable ? 1U : 0U);
-        impl_->bodies.back()->setSleepingThresholds(0.01F, 0.1F * std::numbers::pi_v<float> / 180.0F);
-        impl_->bodies.back()->setActivationState(DISABLE_DEACTIVATION);
-        if (effectiveMode == 0) {
-            impl_->bodies.back()->setCollisionFlags(impl_->bodies.back()->getCollisionFlags() |
-                                                    btCollisionObject::CF_KINEMATIC_OBJECT);
-        }
-        const short group = static_cast<short>(1U << std::min<std::uint8_t>(source.group, 15));
-        // Pass the PMX mask to Bullet unchanged, matching upstream
-        // MikuMikuDayo (groupMask = r.passGroup). Real models are authored
-        // for this convention: e.g. Tda-style legs use group 0 / mask
-        // 0xffff (collide with everything) while skirt panels use groups
-        // 14-15 / mask 0x3fff (collide with the body, not each other).
-        // Inverting the mask here used to leave legs colliding with nothing
-        // while enabling skirt self-collision instead.
-        const short mask = static_cast<short>(source.collisionMask);
-        impl_->world->addRigidBody(impl_->bodies.back().get(), group, mask);
-    }
-    // Use sanitized runtime modes, so disabled/invalid parent bodies do not
-    // turn a standalone mode 2 into a fully simulated bone. Snapshot before
-    // normalization makes this independent of rigid-body array ordering.
-    std::vector<bool> dynamicBones(model.bones.size());
-    for (std::size_t index = 0; index < model.rigidBodies.size(); ++index) {
-        const auto bone = model.rigidBodies[index].bone;
-        if ((impl_->modes[index] == 1 || impl_->modes[index] == 2) && bone >= 0 &&
-            static_cast<std::size_t>(bone) < dynamicBones.size())
-            dynamicBones[static_cast<std::size_t>(bone)] = true;
-    }
-    for (std::size_t index = 0; index < model.rigidBodies.size(); ++index) {
-        const auto bone = model.rigidBodies[index].bone;
-        if (impl_->modes[index] != 2 || bone < 0 || static_cast<std::size_t>(bone) >= model.bones.size())
-            continue;
-        const auto parent = model.bones[static_cast<std::size_t>(bone)].parent;
-        if (parent >= 0 && parent != bone && static_cast<std::size_t>(parent) < dynamicBones.size() &&
-            dynamicBones[static_cast<std::size_t>(parent)])
-            impl_->modes[index] = 1;
-    }
-    impl_->constraints.reserve(model.joints.size());
-    for (const auto &source : model.joints) {
-        if (!source.physicsEnabled || source.type != 0 || source.bodyA < 0 || source.bodyB < 0 ||
-            source.bodyA == source.bodyB || static_cast<std::size_t>(source.bodyA) >= impl_->bodies.size() ||
-            static_cast<std::size_t>(source.bodyB) >= impl_->bodies.size())
-            continue;
-        const auto bodyAIndex = static_cast<std::size_t>(source.bodyA);
-        const auto bodyBIndex = static_cast<std::size_t>(source.bodyB);
-        if (impl_->constraintEndpointsUsable[bodyAIndex] == 0 || impl_->constraintEndpointsUsable[bodyBIndex] == 0)
-            continue;
-        const auto &bodyA = impl_->bodies[bodyAIndex];
-        const auto &bodyB = impl_->bodies[bodyBIndex];
-        // Bullet cannot solve a 6DoF row when neither endpoint has inverse
-        // mass. A number of PMX files contain decorative static-static joints.
-        if (bodyA->getInvMass() <= 0.0F && bodyB->getInvMass() <= 0.0F)
-            continue;
-        if (!finite(source.position) || !finite(source.rotation) || !finite(source.translationMinimum) ||
-            !finite(source.translationMaximum) || !finite(source.rotationMinimum) || !finite(source.rotationMaximum) ||
-            !finite(source.translationSpring) || !finite(source.rotationSpring))
-            continue;
-        const auto jointWorld = transform(source.position, source.rotation);
-        const auto frameA = impl_->initialTransforms[bodyAIndex].inverse() * jointWorld;
-        const auto frameB = impl_->initialTransforms[bodyBIndex].inverse() * jointWorld;
-        std::unique_ptr<btGeneric6DofSpringConstraint> joint;
-        if (profile.useBullet275Constraint)
-            joint = std::make_unique<internal::Bullet275SpringConstraint>(*bodyA, *bodyB, frameA, frameB, true);
-        else
-            joint = std::make_unique<btGeneric6DofSpringConstraint>(*bodyA, *bodyB, frameA, frameB, true);
-        joint->setUseFrameOffset(profile.useFrameOffset);
-        for (int axis = 0; axis < 6; ++axis)
-            joint->setParam(BT_CONSTRAINT_STOP_ERP, profile.stopErp, axis);
-        joint->setLinearLowerLimit(vector(source.translationMinimum));
-        joint->setLinearUpperLimit(vector(source.translationMaximum));
-        joint->setAngularLowerLimit(vector(source.rotationMinimum));
-        joint->setAngularUpperLimit(vector(source.rotationMaximum));
-        for (int axis = 0; axis < 3; ++axis) {
-            if (source.translationSpring[static_cast<std::size_t>(axis)] > 0.0F) {
-                joint->enableSpring(axis, true);
-                joint->setStiffness(axis, source.translationSpring[static_cast<std::size_t>(axis)]);
-            }
-            if (source.rotationSpring[static_cast<std::size_t>(axis)] > 0.0F) {
-                joint->enableSpring(axis + 3, true);
-                joint->setStiffness(axis + 3, source.rotationSpring[static_cast<std::size_t>(axis)]);
-            }
-        }
-        joint->setEquilibriumPoint();
-        // Upstream adds the constraint without disabling collision between
-        // the linked bodies, so joint-connected pairs (e.g. hip to top
-        // skirt row) still collide subject to their masks.
-        impl_->world->addConstraint(joint.get());
-        impl_->constraints.push_back(std::move(joint));
-    }
+    impl_->createRigidBodies(model);
+    impl_->normalizeRuntimeModes(model);
+    impl_->createConstraints(model);
 #else
     static_cast<void>(model);
 #endif

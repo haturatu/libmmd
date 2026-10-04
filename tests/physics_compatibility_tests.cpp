@@ -80,6 +80,43 @@ mmd::PmxBone bone(const char *name, mmd::Float3 position = {}, int parent = -1) 
     return result;
 }
 
+mmd::PmxJoint link(int a, int b) {
+    mmd::PmxJoint joint;
+    joint.bodyA = a;
+    joint.bodyB = b;
+    joint.translationMinimum = {1, 1, 1};
+    joint.translationMaximum = {-1, -1, -1};
+    joint.rotationMinimum = {1, 1, 1};
+    joint.rotationMaximum = {-1, -1, -1};
+    return joint;
+}
+
+void jointNormalization() {
+    for (int scenario = 0; scenario < 9; ++scenario) {
+        mmd::PmxModel model;
+        model.bones = {bone("parent"), bone("child", {}, 0), bone("unrelated")};
+        model.rigidBodies = {body(0, 1, {}), body(1, 2, {}), body(2, 1, {})};
+        if (scenario != 0)
+            model.joints.push_back(link(0, 1));
+        if (scenario == 1)
+            model.joints[0].physicsEnabled = false;
+        if (scenario == 2)
+            model.joints[0].bodyA = 2;
+        if (scenario == 3)
+            model.joints[0].type = 1;
+        if (scenario == 4)
+            model.joints[0].position[0] = std::numeric_limits<float>::quiet_NaN();
+        if (scenario == 5)
+            model.joints[0].bodyA = 999;
+        if (scenario == 6)
+            model.rigidBodies[0].physicsEnabled = false;
+        if (scenario == 8)
+            std::swap(model.joints[0].bodyA, model.joints[0].bodyB);
+        mmd::MmdPhysics physics(model);
+        require(physics.bodyMode(1) == (scenario >= 7 ? 1 : 2), "mode 2 normalization ignored joint validity");
+    }
+}
+
 void nestedModes() {
     for (const std::uint8_t parentMode : {std::uint8_t{1}, std::uint8_t{2}}) {
         for (bool reversed : {false, true}) {
@@ -99,6 +136,7 @@ void nestedModes() {
             }
             if (reversed)
                 std::reverse(model.rigidBodies.begin(), model.rigidBodies.end());
+            model.joints = {link(0, 1), link(1, 2)};
             mmd::MmdPhysics physics(model);
             physics.setGravity({0, 0, 0});
             mmd::MmdAnimator animator(model);
@@ -146,6 +184,7 @@ void nestedModes() {
         if (scenario == 3)
             parent.mode = 0;
         model.rigidBodies = {body(1, 2, {}), parent, body(-1, 2, {}), body(999, 2, {})};
+        model.joints = {link(0, 1)};
         mmd::MmdPhysics physics(model);
         require(physics.bodyMode(0) == 2, "unusable parent normalized child");
         require(physics.bodyMode(2) == 2 && physics.bodyMode(3) == 2, "unbound mode changed");
@@ -164,6 +203,7 @@ void collisionMovesMesh(mmd::PhysicsCompatibilityProfile profile) {
     thigh.size[0] = 1;
     thigh.collisionMask = 0xffff;
     model.rigidBodies = {child, thigh, top};
+    model.joints = {link(2, 0)};
     mmd::PmxVertex vertex;
     vertex.position = child.position;
     vertex.bones[0] = 1;
@@ -336,6 +376,7 @@ int main(int argc, char **argv) {
     try {
         settingsValidation();
 #if LIBMMD_HAS_BULLET
+        jointNormalization();
         nestedModes();
         collisionMovesMesh({});
         collisionMovesMesh(mmd::PhysicsCompatibilityProfile::mmd275Compatible());
