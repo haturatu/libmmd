@@ -13,6 +13,7 @@
 #include <memory>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -1160,7 +1161,7 @@ MotionCompatibility MmdAnimator::motionCompatibility() const {
 }
 
 AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides,
-                                         BoneOverrides boneOverrides) {
+                                         BoneOverrides boneOverrides, ExternalParentTransforms externalParents) {
 #if !LIBMMD_ENABLE_PHYSICS
     static_cast<void>(deltaSeconds);
 #endif
@@ -1506,6 +1507,35 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         logLimbDiagnostics(model_, impl_->boneTracks, local, global, frame);
     }
     previousFrame_ = frame;
+
+    if (!externalParents.empty()) {
+        std::vector<std::optional<ExternalParentTransform>> direct(global.size()), inherited(global.size());
+        for (auto parent : externalParents) {
+            if (parent.index >= global.size() || !finite(parent.translation) || !finite(parent.rotation))
+                continue;
+            parent.rotation = normalize(parent.rotation);
+            direct[parent.index] = parent;
+        }
+        for (const auto index : impl_->parentOrder) {
+            const auto parent = model_.bones[index].parent;
+            if (parent >= 0 && static_cast<std::size_t>(parent) < inherited.size())
+                inherited[index] = inherited[static_cast<std::size_t>(parent)];
+            if (direct[index]) {
+                if (inherited[index]) {
+                    inherited[index] = ExternalParentTransform{
+                        index,
+                        add(rotate(direct[index]->rotation, inherited[index]->translation), direct[index]->translation),
+                        normalize(multiply(direct[index]->rotation, inherited[index]->rotation))};
+                } else
+                    inherited[index] = direct[index];
+            }
+            if (inherited[index]) {
+                const auto &transform = *inherited[index];
+                global[index].position = add(rotate(transform.rotation, global[index].position), transform.translation);
+                global[index].rotation = normalize(multiply(transform.rotation, global[index].rotation));
+            }
+        }
+    }
 
     for (std::size_t index = 0; index < global.size(); ++index) {
         auto &transform = result.bones[index];

@@ -128,6 +128,16 @@ struct BoneOverride {
 };
 using BoneOverrides = std::span<const BoneOverride>;
 
+// Affine model-space parent transform applied after local IK/physics solving
+// and before skinning. Descendants inherit it; local authoring inputs remain
+// unchanged. Repeated entries for one bone use the last valid transform.
+struct ExternalParentTransform {
+    std::size_t index{};
+    Float3 translation{};
+    Float4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
+};
+using ExternalParentTransforms = std::span<const ExternalParentTransform>;
+
 class MmdAnimator {
   public:
     explicit MmdAnimator(const PmxModel &model);
@@ -144,7 +154,8 @@ class MmdAnimator {
     [[nodiscard]] IkEvaluationStats ikEvaluationStats() const noexcept;
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
     [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false,
-                                              MorphOverrides overrides = {}, BoneOverrides boneOverrides = {});
+                                              MorphOverrides overrides = {}, BoneOverrides boneOverrides = {},
+                                              ExternalParentTransforms externalParents = {});
 
   private:
     struct Impl;

@@ -97,3 +97,5 @@ the model or motion. Invalid indices and nonfinite values are ignored; the last
 valid override wins. `physics = false` keeps that edited bone's animation pose
 instead of importing its simulated rigid-body transform. Omit the overrides to
 revert the preview.
+
+`ExternalParentTransforms` optionally applies model-space parent transforms to solved bone subtrees before CPU/GPU skinning. Local authoring inputs remain unchanged; this post-solve attachment does not feed a different model's transform back into the local IK/physics simulation.

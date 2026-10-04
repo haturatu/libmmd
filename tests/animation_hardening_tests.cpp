@@ -55,6 +55,15 @@ int main() {
             mmd::BoneOverride{.index = 1, .translation = {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F}}};
         const auto ignored = animator.evaluate(0.0F, 0.0F, false, overrides, invalidEdits);
         assert(ignored.bones[1].worldPosition == child.worldPosition);
+        const std::array parents{mmd::ExternalParentTransform{.index = 0, .translation = {10, 0, 0}}};
+        const auto attached = animator.evaluate(0, 0, false, overrides, {}, parents);
+        const auto attachedGpu = animator.evaluate(0, 0, true, overrides, {}, parents);
+        assert(attached.bones[1].worldPosition[0] == child.worldPosition[0] + 10);
+        assert(attached.vertices[0].position == attached.bones[1].worldPosition);
+        assert(attached.bones[1].inputTranslation == child.inputTranslation);
+        assert(attachedGpu.bones[1].worldPosition == attached.bones[1].worldPosition);
+        const auto detached = animator.evaluate(0, 0, false, overrides);
+        assert(detached.bones[1].worldPosition == child.worldPosition);
         mmd::VpdPose pose;
         pose.bones.push_back({"child", {1.0F, 0.0F, 0.0F}});
         animator.setPose(&pose);
