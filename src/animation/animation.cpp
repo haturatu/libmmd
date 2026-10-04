@@ -356,6 +356,24 @@ float sampleMorph(MorphTrack &track, float frame) {
     return before->weight + (after->weight - before->weight) * t;
 }
 
+struct SampledBoneInput {
+    LocalPose pose;
+    bool physics{true};
+};
+
+SampledBoneInput sampleBoneInput(BoneTrack &track, const std::unordered_map<std::uint32_t, BezierLut> &luts,
+                                 float frame, InterpolationMode mode) {
+    const auto pose = sampleBone(track, luts, frame, mode);
+    if (track.keys.empty())
+        return {pose, true};
+    // sampleBone leaves the cached cursor at the first key at/after frame.
+    const auto next = track.cursor;
+    const auto index = next >= track.keys.size()                                           ? track.keys.size() - 1
+                       : next == 0 || static_cast<float>(track.keys[next]->frame) == frame ? next
+                                                                                           : next - 1;
+    return {pose, track.keys[index]->physics};
+}
+
 void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local, std::vector<GlobalPose> &global,
                       std::vector<std::uint8_t> &state, std::span<const std::size_t> parentOrder) {
     std::fill(state.begin(), state.end(), std::uint8_t{0});
@@ -990,6 +1008,9 @@ struct MmdAnimator::Impl {
     std::vector<LocalPose> localScratch;
     std::vector<GlobalPose> globalScratch;
     std::vector<std::uint8_t> globalState;
+    std::vector<std::uint8_t> physicsEnabled;
+    std::vector<std::optional<ExternalParentTransform>> externalDirect, externalInherited;
+    std::vector<std::uint8_t> externalProcessed;
     std::unordered_map<std::string_view, BoneTrack> boneTracks;
     std::unordered_map<std::string_view, MorphTrack> morphTracks;
     std::unordered_map<std::uint32_t, BezierLut> bezierLuts;
@@ -1017,6 +1038,7 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
     impl_->localScratch.resize(model_.bones.size());
     impl_->globalScratch.resize(model_.bones.size());
     impl_->globalState.resize(model_.bones.size());
+    impl_->physicsEnabled.resize(model_.bones.size());
     impl_->boneChildren.resize(model_.bones.size());
     impl_->inheritDependents.resize(model_.bones.size());
     impl_->dirtyBones.resize(model_.bones.size());
@@ -1187,10 +1209,15 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 
     auto &local = impl_->localScratch;
     std::fill(local.begin(), local.end(), LocalPose{});
+    auto &physicsEnabled = impl_->physicsEnabled;
+    std::fill(physicsEnabled.begin(), physicsEnabled.end(), std::uint8_t{1});
     for (std::size_t i = 0; i < model_.bones.size(); ++i) {
         if (const auto found = impl_->boneTracks.find(model_.bones[i].name); found != impl_->boneTracks.end()) {
-            local[i] = sampleBone(found->second, impl_->bezierLuts, frame,
-                                  motion_ == nullptr ? InterpolationMode::bezier : motion_->interpolation);
+            const auto sampled =
+                sampleBoneInput(found->second, impl_->bezierLuts, frame,
+                                motion_ == nullptr ? InterpolationMode::bezier : motion_->interpolation);
+            local[i] = sampled.pose;
+            physicsEnabled[i] = static_cast<std::uint8_t>(sampled.physics);
         }
     }
     if (pose_ != nullptr) {
@@ -1209,9 +1236,9 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     for (std::size_t index = 0; index < local.size(); ++index) {
         result.bones[index].inputTranslation = local[index].translation;
         result.bones[index].inputRotation = local[index].rotation;
+        result.bones[index].inputPhysics = physicsEnabled[index] != 0;
     }
 
-    std::vector<bool> physicsEnabled(local.size(), true);
     for (const auto &override : boneOverrides) {
         if (override.index >= local.size() ||
             !std::ranges::all_of(override.translation, [](float value) { return std::isfinite(value); }) ||
@@ -1219,7 +1246,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             continue;
         local[override.index].translation = override.translation;
         local[override.index].rotation = normalize(override.rotation);
-        physicsEnabled[override.index] = override.physics;
+        physicsEnabled[override.index] = static_cast<std::uint8_t>(override.physics);
     }
 
     std::vector<float> morphWeights(model_.morphs.size());
@@ -1509,16 +1536,22 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     previousFrame_ = frame;
 
     if (!externalParents.empty()) {
-        std::vector<std::optional<ExternalParentTransform>> direct(global.size()), inherited(global.size());
+        auto &direct = impl_->externalDirect;
+        auto &inherited = impl_->externalInherited;
+        auto &processed = impl_->externalProcessed;
+        direct.assign(global.size(), std::nullopt);
+        inherited.assign(global.size(), std::nullopt);
+        processed.assign(global.size(), std::uint8_t{0});
         for (auto parent : externalParents) {
             if (parent.index >= global.size() || !finite(parent.translation) || !finite(parent.rotation))
                 continue;
             parent.rotation = normalize(parent.rotation);
             direct[parent.index] = parent;
         }
-        for (const auto index : impl_->parentOrder) {
+        const auto apply = [&](std::size_t index) {
             const auto parent = model_.bones[index].parent;
-            if (parent >= 0 && static_cast<std::size_t>(parent) < inherited.size())
+            if (parent >= 0 && static_cast<std::size_t>(parent) < inherited.size() &&
+                processed[static_cast<std::size_t>(parent)] != 0)
                 inherited[index] = inherited[static_cast<std::size_t>(parent)];
             if (direct[index]) {
                 if (inherited[index]) {
@@ -1534,7 +1567,13 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 global[index].position = add(rotate(transform.rotation, global[index].position), transform.translation);
                 global[index].rotation = normalize(multiply(transform.rotation, global[index].rotation));
             }
-        }
+            processed[index] = 1;
+        };
+        for (const auto index : impl_->parentOrder)
+            apply(index);
+        for (std::size_t index = 0; index < global.size(); ++index)
+            if (processed[index] == 0)
+                apply(index);
     }
 
     for (std::size_t index = 0; index < global.size(); ++index) {

@@ -87,9 +87,16 @@ directory fsync are not performed.
 `localRotation`, and `worldPosition` (PMX model space, before preview
 normalization), in both CPU and GPU skinning modes.
 
-`inputTranslation` and `inputRotation` describe the sampled VMD/VPD pose before
+`inputTranslation`, `inputRotation`, and `inputPhysics` describe the sampled VMD/VPD pose before
 morphs, append transforms, IK, and physics. Register these input values when
 editing motion keys, rather than baking solved deformation a second time.
+`inputPhysics` is a step value: the preceding key controls frames between keys,
+the new key controls its exact frame, and the first/last key controls frames
+outside the track. Missing tracks default to true; VPD only overrides the pose.
+Valid transient edits change runtime physics import, but leave the input snapshot
+unchanged. Animator-owned physics/attachment scratch retains its capacity across
+evaluations. Malformed parent cycles use the same deterministic root fallback
+for external attachments as for global bone evaluation.
 
 The optional fifth argument to `MmdAnimator::evaluate`, `BoneOverrides`, applies
 absolute transient input poses before runtime deformation. It does not mutate

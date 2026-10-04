@@ -8,7 +8,74 @@
 #include <limits>
 #include <span>
 
+namespace {
+bool near(float left, float right) {
+    return std::abs(left - right) <= 1.0e-5F;
+}
+template <std::size_t N> bool near(const std::array<float, N> &left, const std::array<float, N> &right) {
+    return std::ranges::equal(left, right, [](float a, float b) { return near(a, b); });
+}
+} // namespace
+
 int main() {
+    {
+        mmd::PmxModel model;
+        model.bones.resize(2);
+        model.bones[0].name = "physics";
+        mmd::VmdMotion motion;
+        motion.bones.push_back({.name = "physics", .frame = 5, .physics = false});
+        motion.bones.push_back({.name = "physics", .frame = 10, .physics = true});
+        motion.bones.push_back({.name = "physics", .frame = 20, .physics = false});
+        mmd::MmdAnimator animator(model);
+        animator.setMotion(&motion);
+        for (const auto frame : {-5.0F, 0.0F, 5.0F, 9.5F, 20.0F, 100.0F}) {
+            const auto result = animator.evaluate(frame);
+            assert(!result.bones[0].inputPhysics);
+            assert(result.bones[1].inputPhysics);
+        }
+        for (const auto frame : {10.0F, 10.5F, 19.5F})
+            assert(animator.evaluate(frame).bones[0].inputPhysics);
+        // Reverse sampling resets the cached track cursor correctly.
+        assert(!animator.evaluate(5).bones[0].inputPhysics);
+        mmd::VpdPose pose;
+        pose.bones.push_back({"physics", {2, 0, 0}});
+        animator.setPose(&pose);
+        const std::array edits{mmd::BoneOverride{.index = 0, .translation = {3, 0, 0}, .physics = true}};
+        const auto preview = animator.evaluate(5, 0, false, {}, edits);
+        assert(!preview.bones[0].inputPhysics);
+        assert(near(preview.bones[0].inputTranslation, mmd::Float3{2, 0, 0}));
+        assert(near(preview.bones[0].localTranslation, mmd::Float3{3, 0, 0}));
+        animator.setMotion(nullptr);
+        assert(animator.evaluate(5).bones[0].inputPhysics);
+    }
+    {
+        mmd::PmxModel broken;
+        broken.bones.resize(2);
+        broken.bones[0].parent = 1;
+        broken.bones[1].parent = 0;
+        broken.bones[0].position = {2, 0, 0};
+        broken.bones[1].position = {2, 1, 0};
+        mmd::MmdAnimator animator(broken);
+        const auto original = animator.evaluate(0);
+        const std::array parent{mmd::ExternalParentTransform{.index = 0, .translation = {10, 0, 0}}};
+        const auto attached = animator.evaluate(0, 0, false, {}, {}, parent);
+        const auto gpu = animator.evaluate(0, 0, true, {}, {}, parent);
+        for (std::size_t index = 0; index < original.bones.size(); ++index) {
+            auto expected = original.bones[index].worldPosition;
+            expected[0] += 10;
+            assert(near(attached.bones[index].worldPosition, expected));
+            assert(near(gpu.bones[index].worldPosition, expected));
+        }
+        // Unprocessed cyclic parents do not retroactively affect the root fallback.
+        const std::array child{mmd::ExternalParentTransform{.index = 1, .translation = {0, 4, 0}}};
+        const auto childAttached = animator.evaluate(0, 0, false, {}, {}, child);
+        assert(near(childAttached.bones[0].worldPosition, original.bones[0].worldPosition));
+        auto expectedChild = original.bones[1].worldPosition;
+        expectedChild[1] += 4;
+        assert(near(childAttached.bones[1].worldPosition, expectedChild));
+        const auto detached = animator.evaluate(0);
+        assert(near(detached.bones[0].worldPosition, original.bones[0].worldPosition));
+    }
     {
         mmd::PmxModel poseModel;
         poseModel.bones.resize(2);
@@ -31,47 +98,47 @@ int main() {
         const auto cpu = animator.evaluate(0.0F, 0.0F, false, overrides);
         const auto gpu = animator.evaluate(0.0F, 0.0F, true, overrides);
         const auto &child = cpu.bones[1];
-        assert(child.inputTranslation == (mmd::Float3{3.0F, 0.0F, 0.0F}));
-        assert(child.localTranslation == (mmd::Float3{3.0F, 2.0F, 0.0F}));
-        assert(child.worldPosition == (mmd::Float3{-1.0F, -2.0F, 0.0F}));
-        assert(child.translation == (mmd::Float3{1.0F, -1.0F, 0.0F}));
-        assert(child.localRotation == (mmd::Float4{0.0F, 0.0F, 0.0F, 1.0F}));
-        assert(cpu.vertices[0].position == child.worldPosition);
-        assert(gpu.vertices[0].position == poseModel.vertices[0].position);
+        assert(near(child.inputTranslation, (mmd::Float3{3.0F, 0.0F, 0.0F})));
+        assert(near(child.localTranslation, (mmd::Float3{3.0F, 2.0F, 0.0F})));
+        assert(near(child.worldPosition, (mmd::Float3{-1.0F, -2.0F, 0.0F})));
+        assert(near(child.translation, (mmd::Float3{1.0F, -1.0F, 0.0F})));
+        assert(near(child.localRotation, (mmd::Float4{0.0F, 0.0F, 0.0F, 1.0F})));
+        assert(near(cpu.vertices[0].position, child.worldPosition));
+        assert(near(gpu.vertices[0].position, poseModel.vertices[0].position));
         for (std::size_t index = 0; index < cpu.bones.size(); ++index) {
-            assert(cpu.bones[index].worldPosition == gpu.bones[index].worldPosition);
-            assert(cpu.bones[index].localRotation == gpu.bones[index].localRotation);
-            assert(cpu.bones[index].inputTranslation == gpu.bones[index].inputTranslation);
+            assert(near(cpu.bones[index].worldPosition, gpu.bones[index].worldPosition));
+            assert(near(cpu.bones[index].localRotation, gpu.bones[index].localRotation));
+            assert(near(cpu.bones[index].inputTranslation, gpu.bones[index].inputTranslation));
         }
         const std::array edits{mmd::BoneOverride{.index = 1, .translation = {4.0F, 0.0F, 0.0F}}};
         const auto edited = animator.evaluate(0.0F, 0.0F, false, overrides, edits);
-        assert(edited.bones[1].localTranslation == (mmd::Float3{4.0F, 2.0F, 0.0F}));
-        assert(edited.bones[1].inputTranslation == motion.bones[1].translation);
-        assert(edited.bones[1].worldPosition == (mmd::Float3{-2.0F, -2.0F, 0.0F}));
+        assert(near(edited.bones[1].localTranslation, (mmd::Float3{4.0F, 2.0F, 0.0F})));
+        assert(near(edited.bones[1].inputTranslation, motion.bones[1].translation));
+        assert(near(edited.bones[1].worldPosition, (mmd::Float3{-2.0F, -2.0F, 0.0F})));
         const auto unedited = animator.evaluate(0.0F, 0.0F, false, overrides);
-        assert(unedited.bones[1].worldPosition == child.worldPosition);
+        assert(near(unedited.bones[1].worldPosition, child.worldPosition));
         const std::array invalidEdits{
             mmd::BoneOverride{.index = 999},
             mmd::BoneOverride{.index = 1, .translation = {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F}}};
         const auto ignored = animator.evaluate(0.0F, 0.0F, false, overrides, invalidEdits);
-        assert(ignored.bones[1].worldPosition == child.worldPosition);
+        assert(near(ignored.bones[1].worldPosition, child.worldPosition));
         const std::array parents{mmd::ExternalParentTransform{.index = 0, .translation = {10, 0, 0}}};
         const auto attached = animator.evaluate(0, 0, false, overrides, {}, parents);
         const auto attachedGpu = animator.evaluate(0, 0, true, overrides, {}, parents);
-        assert(attached.bones[1].worldPosition[0] == child.worldPosition[0] + 10);
-        assert(attached.vertices[0].position == attached.bones[1].worldPosition);
-        assert(attached.bones[1].inputTranslation == child.inputTranslation);
-        assert(attachedGpu.bones[1].worldPosition == attached.bones[1].worldPosition);
+        assert(near(attached.bones[1].worldPosition[0], child.worldPosition[0] + 10));
+        assert(near(attached.vertices[0].position, attached.bones[1].worldPosition));
+        assert(near(attached.bones[1].inputTranslation, child.inputTranslation));
+        assert(near(attachedGpu.bones[1].worldPosition, attached.bones[1].worldPosition));
         const auto detached = animator.evaluate(0, 0, false, overrides);
-        assert(detached.bones[1].worldPosition == child.worldPosition);
+        assert(near(detached.bones[1].worldPosition, child.worldPosition));
         mmd::VpdPose pose;
         pose.bones.push_back({"child", {1.0F, 0.0F, 0.0F}});
         animator.setPose(&pose);
         const auto posed = animator.evaluate(0.0F);
-        assert(posed.bones[1].inputTranslation == pose.bones[0].translation);
+        assert(near(posed.bones[1].inputTranslation, pose.bones[0].translation));
         animator.setPose(nullptr);
         const auto reverted = animator.evaluate(0.0F);
-        assert(reverted.bones[1].inputTranslation == motion.bones[1].translation);
+        assert(near(reverted.bones[1].inputTranslation, motion.bones[1].translation));
     }
 
     mmd::PmxModel model;

@@ -28,6 +28,9 @@ struct AnimatedModelFrame {
         // these values to avoid baking morph/IK/append/physics twice.
         Float3 inputTranslation{};
         Float4 inputRotation{0.0F, 0.0F, 0.0F, 1.0F};
+        // Step-sampled VMD flag: preceding key between keys, new key at its
+        // exact frame, first/last key outside the track. VPD preserves it.
+        bool inputPhysics{true};
     };
     std::vector<PmxVertex> vertices;
     // Effective vertex-morph weights are populated for GPU skinning. The
