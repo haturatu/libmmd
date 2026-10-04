@@ -186,6 +186,26 @@ PmxIndexWidths pmx::chooseIndexWidths(const PmxModel &model, PmxSaveOptions opti
 
 ValidationResult pmx::validate(const PmxModel &model) {
     ValidationResult result;
+    const auto formatError = [&](bool valid, const char *field, const char *message) {
+        if (valid)
+            return;
+        ValidationIssue issue{ValidationSeverity::error, ValidationCode::invalid_format, {}, message};
+        issue.location.field = field;
+        result.issues.push_back(std::move(issue));
+    };
+    const auto &format = model.format;
+    formatError(format.textEncoding == PmxTextEncoding::utf16le || format.textEncoding == PmxTextEncoding::utf8,
+                "textEncoding", "invalid PMX text encoding");
+    formatError(internal::validPmxIndexWidth(format.vertexIndexSize), "vertexIndexSize",
+                "invalid PMX vertex index width");
+    formatError(internal::validPmxIndexWidth(format.textureIndexSize), "textureIndexSize",
+                "invalid PMX texture index width");
+    formatError(internal::validPmxIndexWidth(format.materialIndexSize), "materialIndexSize",
+                "invalid PMX material index width");
+    formatError(internal::validPmxIndexWidth(format.boneIndexSize), "boneIndexSize", "invalid PMX bone index width");
+    formatError(internal::validPmxIndexWidth(format.morphIndexSize), "morphIndexSize", "invalid PMX morph index width");
+    formatError(internal::validPmxIndexWidth(format.rigidBodyIndexSize), "rigidBodyIndexSize",
+                "invalid PMX rigid body index width");
     addError(result, model.metadata.version >= 2.0F && model.metadata.version <= 2.1F, "unsupported PMX version");
     addError(result, model.metadata.additionalUvCount <= 4, "additional UV count exceeds four");
     addError(result, model.indices.size() % 3 == 0, "index count is not divisible by three");
@@ -210,6 +230,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
     addError(result, materialIndices == model.indices.size(), "material ranges do not cover indices");
     for (std::size_t vertexIndex = 0; vertexIndex < model.vertices.size(); ++vertexIndex) {
         const auto &vertex = model.vertices[vertexIndex];
+        addIndexedError(result, internal::validVertexWeightType(vertex.weightType), "vertex weight type is invalid",
+                        ReferenceObjectKind::vertex, vertexIndex);
         bool vertexFinite = finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) &&
                             finite(vertex.weights) && finite(vertex.edgeScale);
         for (std::size_t i = 0; i < model.metadata.additionalUvCount; ++i)
@@ -310,13 +332,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
     for (std::size_t bodyIndex = 0; bodyIndex < model.rigidBodies.size(); ++bodyIndex)
         internal::validateRigidBody(model, model.rigidBodies[bodyIndex],
                                     reportPhysics(ReferenceObjectKind::rigidBody, bodyIndex));
-    for (std::size_t jointIndex = 0; jointIndex < model.joints.size(); ++jointIndex) {
-        const auto &joint = model.joints[jointIndex];
-        addIndexedError(result, inRange(joint.bodyA, model.rigidBodies.size()), "joint A body index is out of range",
-                        ReferenceObjectKind::joint, jointIndex);
-        addIndexedError(result, inRange(joint.bodyB, model.rigidBodies.size()), "joint B body index is out of range",
-                        ReferenceObjectKind::joint, jointIndex);
-    }
+    for (std::size_t jointIndex = 0; jointIndex < model.joints.size(); ++jointIndex)
+        internal::validateJoint(model, model.joints[jointIndex], reportPhysics(ReferenceObjectKind::joint, jointIndex));
     for (std::size_t index = 0; index < model.softBodies.size(); ++index)
         internal::validateSoftBody(model, model.softBodies[index], reportPhysics(ReferenceObjectKind::softBody, index));
     return result;
@@ -379,6 +396,8 @@ PmxSaveReport pmx::save(const std::filesystem::path &path, const PmxModel &model
             writeArray(output, vertex.sdefR0, "SDEF R0");
             writeArray(output, vertex.sdefR1, "SDEF R1");
             break;
+        default:
+            throw std::runtime_error("invalid PMX vertex weight type");
         }
         write(output, vertex.edgeScale, "edge scale");
     }

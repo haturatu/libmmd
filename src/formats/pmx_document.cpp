@@ -930,6 +930,7 @@ ValidationResult PmxDocument::validateProperty(ReferenceObjectKind kind, std::si
 
     if (kind == ReferenceObjectKind::vertex) {
         const auto &value = model_.vertices[index];
+        addError(internal::validVertexWeightType(value.weightType), "vertex weight type is invalid");
         addError(finite(value.position) && finite(value.normal) && finite(value.uv) && finite(value.weights),
                  "vertex contains non-finite values");
         addError(model_.metadata.version >= 2.1F || value.weightType != PmxWeightType::qdef, "QDEF requires PMX 2.1");
@@ -991,9 +992,7 @@ ValidationResult PmxDocument::validateProperty(ReferenceObjectKind kind, std::si
     } else if (kind == ReferenceObjectKind::rigidBody) {
         internal::validateRigidBody(model_, model_.rigidBodies[index], reportPhysics);
     } else if (kind == ReferenceObjectKind::joint) {
-        const auto &value = model_.joints[index];
-        addError(inRange(value.bodyA, model_.rigidBodies.size()), "joint A body index is out of range");
-        addError(inRange(value.bodyB, model_.rigidBodies.size()), "joint B body index is out of range");
+        internal::validateJoint(model_, model_.joints[index], reportPhysics);
     } else if (kind == ReferenceObjectKind::softBody) {
         internal::validateSoftBody(model_, model_.softBodies[index], reportPhysics);
     }

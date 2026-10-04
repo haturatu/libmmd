@@ -1,6 +1,7 @@
 #include <mmd/animation.hpp>
 #include <mmd/document.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -187,6 +188,116 @@ void softBodyValidation() {
     require(mmd::pmx::validate(detached).valid(), "editor's optional none references became invalid");
 }
 
+void jointValidation() {
+    auto original = physicsModel();
+    original.joints.resize(1);
+    original.joints[0].bodyA = 0;
+    original.joints[0].bodyB = 0;
+    const auto check = [&](const mmd::PmxJoint &joint) {
+        auto invalid = original;
+        invalid.joints[0] = joint;
+        mmd::PmxDocument document(original);
+        const auto property = document.replaceJoint(document.jointHandle(0), joint);
+        require(!property.committed, "invalid joint property committed");
+        sameDiagnostics(mmd::pmx::validate(invalid), property.validation);
+        auto transaction = document.transaction();
+        require(transaction.setJoint(document.jointHandle(0), joint), "joint setter failed");
+        require(!transaction.commit().committed, "invalid joint transaction committed");
+        require(document.model().joints == original.joints, "failed joint edit changed document");
+        saveRejects(invalid);
+    };
+    constexpr std::array<mmd::Float3 mmd::PmxJoint::*, 8> fields{
+        &mmd::PmxJoint::position,           &mmd::PmxJoint::rotation,        &mmd::PmxJoint::translationMinimum,
+        &mmd::PmxJoint::translationMaximum, &mmd::PmxJoint::rotationMinimum, &mmd::PmxJoint::rotationMaximum,
+        &mmd::PmxJoint::translationSpring,  &mmd::PmxJoint::rotationSpring};
+    for (auto field : fields)
+        for (std::size_t component = 0; component < 3; ++component)
+            for (float bad : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
+                auto joint = original.joints[0];
+                (joint.*field)[component] = bad;
+                check(joint);
+            }
+    for (std::uint8_t type : {std::uint8_t{6}, std::uint8_t{255}}) {
+        auto joint = original.joints[0];
+        joint.type = type;
+        check(joint);
+    }
+    auto disabled = original.joints[0];
+    disabled.physicsEnabled = false;
+    disabled.position[0] = std::numeric_limits<float>::quiet_NaN();
+    check(disabled);
+    for (int type = 0; type <= 5; ++type) {
+        auto model = original;
+        model.joints[0].type = static_cast<std::uint8_t>(type);
+        require(mmd::pmx::validate(model).valid(), "valid PMX 2.1 joint type rejected");
+        model.metadata.version = 2.0F;
+        model.softBodies.clear();
+        require(mmd::pmx::validate(model).valid() == (type == 0), "PMX 2.0 joint type contract violated");
+        if (type != 0) {
+            mmd::PmxDocument document(model);
+            require(!document.replaceJoint(document.jointHandle(0), model.joints[0]).committed,
+                    "PMX 2.0 joint property accepted 2.1 type");
+            require(!document.transaction().commit().committed, "PMX 2.0 joint transaction accepted 2.1 type");
+            saveRejects(model);
+        }
+    }
+}
+
+void softBodyValues() {
+    const auto original = physicsModel();
+    const auto check = [&](const mmd::PmxSoftBody &body) {
+        auto invalid = original;
+        invalid.softBodies[0] = body;
+        mmd::PmxDocument document(original);
+        const auto property = document.replaceSoftBody(document.softBodyHandle(0), body);
+        require(!property.committed, "invalid soft body value property committed");
+        sameDiagnostics(mmd::pmx::validate(invalid), property.validation);
+        auto transaction = document.transaction();
+        require(transaction.setSoftBody(document.softBodyHandle(0), body), "soft body setter failed");
+        require(!transaction.commit().committed, "invalid soft body value transaction committed");
+        require(document.model().softBodies == original.softBodies, "failed soft body edit changed document");
+        saveRejects(invalid);
+    };
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        auto body = original.softBodies[0];
+        if (scenario == 0)
+            body.shape = 255;
+        if (scenario == 1)
+            body.group = 255;
+        if (scenario == 2)
+            body.aeroModel = -1;
+        check(body);
+    }
+    auto invalidAero = original.softBodies[0];
+    invalidAero.aeroModel = 999;
+    check(invalidAero);
+    for (float bad : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
+        for (auto field : {&mmd::PmxSoftBody::totalMass, &mmd::PmxSoftBody::collisionMargin}) {
+            auto body = original.softBodies[0];
+            body.*field = bad;
+            check(body);
+        }
+        const auto arrays = [&](auto field) {
+            for (std::size_t index = 0; index < (original.softBodies[0].*field).size(); ++index) {
+                auto body = original.softBodies[0];
+                (body.*field)[index] = bad;
+                check(body);
+            }
+        };
+        arrays(&mmd::PmxSoftBody::config);
+        arrays(&mmd::PmxSoftBody::cluster);
+        arrays(&mmd::PmxSoftBody::materialConfig);
+    }
+    for (std::uint8_t shape : {std::uint8_t{0}, std::uint8_t{1}})
+        for (int aero = 0; aero <= 4; ++aero) {
+            auto model = original;
+            model.softBodies[0].shape = shape;
+            model.softBodies[0].aeroModel = aero;
+            model.softBodies[0].group = 15;
+            require(mmd::pmx::validate(model).valid(), "valid soft body enum boundary rejected");
+        }
+}
+
 void poseOverridesMotion() {
     mmd::PmxModel model;
     model.bones.resize(2);
@@ -227,6 +338,8 @@ int main() {
         propertyDependencyCycle();
         rigidBodyValidation();
         softBodyValidation();
+        jointValidation();
+        softBodyValues();
         poseOverridesMotion();
         std::puts("document and pose hardening tests passed");
     } catch (const std::exception &error) {
