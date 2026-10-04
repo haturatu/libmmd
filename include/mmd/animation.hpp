@@ -19,6 +19,18 @@ struct AnimatedModelFrame {
     struct BoneTransform {
         Float4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
         Float3 translation{};
+        // Final solved local pose (including morph, append, IK and physics).
+        Float3 localTranslation{};
+        Float4 localRotation{0.0F, 0.0F, 0.0F, 1.0F};
+        // Final bone origin in PMX model space; independent of vertex skinning.
+        Float3 worldPosition{};
+        // Sampled VMD/VPD input before runtime deformation. Editors register
+        // these values to avoid baking morph/IK/append/physics twice.
+        Float3 inputTranslation{};
+        Float4 inputRotation{0.0F, 0.0F, 0.0F, 1.0F};
+        // Step-sampled VMD flag: preceding key between keys, new key at its
+        // exact frame, first/last key outside the track. VPD preserves it.
+        bool inputPhysics{true};
     };
     std::vector<PmxVertex> vertices;
     // Effective vertex-morph weights are populated for GPU skinning. The
@@ -108,6 +120,29 @@ struct MorphOverride {
 
 using MorphOverrides = std::span<const MorphOverride>;
 
+// Absolute, transient VMD-local input. Applied before bone morphs, append,
+// IK and skinning; never mutates the motion/model. Invalid indices/nonfinite
+// poses are ignored. Last valid override for a bone wins.
+struct BoneOverride {
+    std::size_t index{};
+    Float3 translation{};
+    Float4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
+    bool physics{true};
+};
+using BoneOverrides = std::span<const BoneOverride>;
+
+// Replacement parent world pose in PMX model space, applied after local
+// IK/physics solving and before skinning. Removes the original parent pose
+// while preserving the solved child-relative pose. Descendants inherit the
+// correction; a nested attachment replaces it. Authoring inputs remain unchanged.
+// Repeated entries for one child use the last valid parent pose.
+struct ExternalParentTransform {
+    std::size_t childBone{};
+    Float3 parentPosition{};
+    Float4 parentRotation{0.0F, 0.0F, 0.0F, 1.0F};
+};
+using ExternalParentTransforms = std::span<const ExternalParentTransform>;
+
 class MmdAnimator {
   public:
     explicit MmdAnimator(const PmxModel &model);
@@ -124,7 +159,8 @@ class MmdAnimator {
     [[nodiscard]] IkEvaluationStats ikEvaluationStats() const noexcept;
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
     [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false,
-                                              MorphOverrides overrides = {});
+                                              MorphOverrides overrides = {}, BoneOverrides boneOverrides = {},
+                                              ExternalParentTransforms externalParents = {});
 
   private:
     struct Impl;
