@@ -1,3 +1,4 @@
+#include "atomic_file_output.hpp"
 #include "pmx_validation.hpp"
 #include <mmd/pmx.hpp>
 
@@ -5,7 +6,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -186,6 +186,26 @@ PmxIndexWidths pmx::chooseIndexWidths(const PmxModel &model, PmxSaveOptions opti
 
 ValidationResult pmx::validate(const PmxModel &model) {
     ValidationResult result;
+    const auto formatError = [&](bool valid, const char *field, const char *message) {
+        if (valid)
+            return;
+        ValidationIssue issue{ValidationSeverity::error, ValidationCode::invalid_format, {}, message};
+        issue.location.field = field;
+        result.issues.push_back(std::move(issue));
+    };
+    const auto &format = model.format;
+    formatError(format.textEncoding == PmxTextEncoding::utf16le || format.textEncoding == PmxTextEncoding::utf8,
+                "textEncoding", "invalid PMX text encoding");
+    formatError(internal::validPmxIndexWidth(format.vertexIndexSize), "vertexIndexSize",
+                "invalid PMX vertex index width");
+    formatError(internal::validPmxIndexWidth(format.textureIndexSize), "textureIndexSize",
+                "invalid PMX texture index width");
+    formatError(internal::validPmxIndexWidth(format.materialIndexSize), "materialIndexSize",
+                "invalid PMX material index width");
+    formatError(internal::validPmxIndexWidth(format.boneIndexSize), "boneIndexSize", "invalid PMX bone index width");
+    formatError(internal::validPmxIndexWidth(format.morphIndexSize), "morphIndexSize", "invalid PMX morph index width");
+    formatError(internal::validPmxIndexWidth(format.rigidBodyIndexSize), "rigidBodyIndexSize",
+                "invalid PMX rigid body index width");
     addError(result, model.metadata.version >= 2.0F && model.metadata.version <= 2.1F, "unsupported PMX version");
     addError(result, model.metadata.additionalUvCount <= 4, "additional UV count exceeds four");
     addError(result, model.indices.size() % 3 == 0, "index count is not divisible by three");
@@ -210,6 +230,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
     addError(result, materialIndices == model.indices.size(), "material ranges do not cover indices");
     for (std::size_t vertexIndex = 0; vertexIndex < model.vertices.size(); ++vertexIndex) {
         const auto &vertex = model.vertices[vertexIndex];
+        addIndexedError(result, internal::validVertexWeightType(vertex.weightType), "vertex weight type is invalid",
+                        ReferenceObjectKind::vertex, vertexIndex);
         bool vertexFinite = finite(vertex.position) && finite(vertex.normal) && finite(vertex.uv) &&
                             finite(vertex.weights) && finite(vertex.edgeScale);
         for (std::size_t i = 0; i < model.metadata.additionalUvCount; ++i)
@@ -267,33 +289,7 @@ ValidationResult pmx::validate(const PmxModel &model) {
                                     "IK link limit contains non-finite values", ReferenceObjectKind::bone, boneIndex);
         }
     }
-    std::vector<std::vector<std::size_t>> dependents(model.bones.size());
-    std::vector<std::size_t> indegree(model.bones.size());
-    for (std::size_t child = 0; child < model.bones.size(); ++child) {
-        const auto addDependency = [&](std::int32_t parent) {
-            if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size()) {
-                dependents[static_cast<std::size_t>(parent)].push_back(child);
-                ++indegree[child];
-            }
-        };
-        addDependency(model.bones[child].parent);
-        if ((model.bones[child].flags & 0x0300U) != 0)
-            addDependency(model.bones[child].inheritParent);
-    }
-    std::vector<std::size_t> pending;
-    for (std::size_t index = 0; index < indegree.size(); ++index)
-        if (indegree[index] == 0)
-            pending.push_back(index);
-    std::size_t visited{};
-    while (!pending.empty()) {
-        const auto index = pending.back();
-        pending.pop_back();
-        ++visited;
-        for (const auto child : dependents[index])
-            if (--indegree[child] == 0)
-                pending.push_back(child);
-    }
-    if (visited != model.bones.size())
+    if (internal::hasBoneDependencyCycle(model.bones))
         result.issues.push_back(
             {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone dependency graph contains a cycle"});
     for (std::size_t morphIndex = 0; morphIndex < model.morphs.size(); ++morphIndex) {
@@ -321,18 +317,25 @@ ValidationResult pmx::validate(const PmxModel &model) {
         for (const auto &item : model.displayFrames[frameIndex].items)
             addIndexedError(result, inRange(item.index, item.bone ? model.bones.size() : model.morphs.size(), false),
                             "display frame index is out of range", ReferenceObjectKind::displayFrame, frameIndex);
+    const auto reportPhysics = [&](ReferenceObjectKind kind, std::size_t index) {
+        return
+            [&, kind, index](bool valid, ValidationCode code, const char *field, const char *message, std::uint32_t) {
+                if (valid)
+                    return;
+                ValidationIssue issue{ValidationSeverity::error, code, {}, message};
+                issue.location.kind = kind;
+                issue.location.field = field;
+                issue.location.subIndex = static_cast<std::uint32_t>(index);
+                result.issues.push_back(std::move(issue));
+            };
+    };
     for (std::size_t bodyIndex = 0; bodyIndex < model.rigidBodies.size(); ++bodyIndex)
-        addIndexedError(result, inRange(model.rigidBodies[bodyIndex].bone, model.bones.size()),
-                        "rigid body bone index is out of range", ReferenceObjectKind::rigidBody, bodyIndex);
-    for (std::size_t jointIndex = 0; jointIndex < model.joints.size(); ++jointIndex) {
-        const auto &joint = model.joints[jointIndex];
-        addIndexedError(result, inRange(joint.bodyA, model.rigidBodies.size()), "joint A body index is out of range",
-                        ReferenceObjectKind::joint, jointIndex);
-        addIndexedError(result, inRange(joint.bodyB, model.rigidBodies.size()), "joint B body index is out of range",
-                        ReferenceObjectKind::joint, jointIndex);
-    }
-    if (!model.softBodies.empty())
-        addError(result, model.metadata.version >= 2.1F, "soft bodies require PMX 2.1");
+        internal::validateRigidBody(model, model.rigidBodies[bodyIndex],
+                                    reportPhysics(ReferenceObjectKind::rigidBody, bodyIndex));
+    for (std::size_t jointIndex = 0; jointIndex < model.joints.size(); ++jointIndex)
+        internal::validateJoint(model, model.joints[jointIndex], reportPhysics(ReferenceObjectKind::joint, jointIndex));
+    for (std::size_t index = 0; index < model.softBodies.size(); ++index)
+        internal::validateSoftBody(model, model.softBodies[index], reportPhysics(ReferenceObjectKind::softBody, index));
     return result;
 }
 
@@ -340,9 +343,14 @@ PmxSaveReport pmx::save(const std::filesystem::path &path, const PmxModel &model
     const auto validation = validate(model);
     if (!validation.valid())
         throw std::runtime_error("cannot save invalid PMX: " + validation.issues.front().message);
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output)
-        throw std::runtime_error("cannot open PMX for writing: " + path.string());
+    internal::AtomicFileOutput staged(path);
+    auto &output = staged.stream();
+    struct RestoreEncoding {
+        PmxTextEncoding previous;
+        ~RestoreEncoding() {
+            outputEncoding = previous;
+        }
+    } encodingScope{outputEncoding};
 
     output.write("PMX ", 4);
     const auto version = model.metadata.version;
@@ -393,6 +401,8 @@ PmxSaveReport pmx::save(const std::filesystem::path &path, const PmxModel &model
             writeArray(output, vertex.sdefR0, "SDEF R0");
             writeArray(output, vertex.sdefR1, "SDEF R1");
             break;
+        default:
+            throw std::runtime_error("invalid PMX vertex weight type");
         }
         write(output, vertex.edgeScale, "edge scale");
     }
@@ -584,7 +594,7 @@ PmxSaveReport pmx::save(const std::filesystem::path &path, const PmxModel &model
                 writeVertexIndex(output, static_cast<std::uint32_t>(vertex), widths.vertex, "soft body pin vertex");
         }
     }
-    outputEncoding = PmxTextEncoding::utf8;
+    staged.commit();
     return {.changedEncoding =
                 options.mode == PmxSaveMode::canonical && model.format.textEncoding != PmxTextEncoding::utf8,
             .vertex = {model.format.vertexIndexSize, widths.vertex},

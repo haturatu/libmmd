@@ -100,31 +100,6 @@ constexpr std::uint16_t boneInheritFlags = 0x0300U;
 constexpr std::uint16_t boneInheritRotationFlag = 0x0100U;
 constexpr std::uint16_t boneInheritTranslationFlag = 0x0200U;
 
-bool hasBoneDependencyCycle(const std::vector<PmxBone> &bones) {
-    std::vector<std::uint8_t> state(bones.size());
-    const auto visit = [&](auto &&self, std::size_t index) -> bool {
-        if (state[index] == 1)
-            return true;
-        if (state[index] == 2)
-            return false;
-        state[index] = 1;
-        const auto visitEdge = [&](std::int32_t target) {
-            if (target < 0 || static_cast<std::size_t>(target) >= bones.size())
-                return false;
-            return self(self, static_cast<std::size_t>(target));
-        };
-        if (visitEdge(bones[index].parent) ||
-            ((bones[index].flags & boneInheritFlags) != 0 && visitEdge(bones[index].inheritParent)))
-            return true;
-        state[index] = 2;
-        return false;
-    };
-    for (std::size_t i = 0; i < bones.size(); ++i)
-        if (visit(visit, i))
-            return true;
-    return false;
-}
-
 } // namespace
 
 struct PmxPatch::Data {
@@ -190,8 +165,10 @@ void makeCollectionSides(const std::vector<Value> &beforeValues, const PmxDocume
     ids.reserve(beforeTable.slots.size() + afterTable.slots.size());
     for (const auto &slot : beforeTable.slots)
         ids.push_back(slot.id);
+    // Handle IDs are unique within each table; use its existing index rather
+    // than scanning the accumulated IDs for every bone in a large document.
     for (const auto &slot : afterTable.slots)
-        if (std::find(ids.begin(), ids.end(), slot.id) == ids.end())
+        if (!beforeTable.indexById.contains(slot.id))
             ids.push_back(slot.id);
     for (const auto id : ids) {
         const auto beforeFound = beforeTable.indexById.find(id);
@@ -942,8 +919,18 @@ ValidationResult PmxDocument::validateProperty(ReferenceObjectKind kind, std::si
         return std::all_of(values.begin(), values.end(), [](float value) { return std::isfinite(value); });
     };
 
+    const auto reportPhysics = [&](bool valid, ValidationCode code, const char *field, const char *message,
+                                   std::uint32_t subIndex) {
+        if (valid)
+            return;
+        ValidationIssue issue{ValidationSeverity::error, code, {}, message};
+        issue.location = {kind, ownerId, ownerGeneration, field, subIndex};
+        result.issues.push_back(std::move(issue));
+    };
+
     if (kind == ReferenceObjectKind::vertex) {
         const auto &value = model_.vertices[index];
+        addError(internal::validVertexWeightType(value.weightType), "vertex weight type is invalid");
         addError(finite(value.position) && finite(value.normal) && finite(value.uv) && finite(value.weights),
                  "vertex contains non-finite values");
         addError(model_.metadata.version >= 2.1F || value.weightType != PmxWeightType::qdef, "QDEF requires PMX 2.1");
@@ -975,16 +962,7 @@ ValidationResult PmxDocument::validateProperty(ReferenceObjectKind kind, std::si
                 addError(inRange(value.ikLinks[subIndex].bone, model_.bones.size()), "IK link index is out of range",
                          static_cast<std::uint32_t>(subIndex));
         }
-        std::vector<bool> visited(model_.bones.size());
-        auto parent = static_cast<std::int32_t>(index);
-        while (parent >= 0 && static_cast<std::size_t>(parent) < model_.bones.size()) {
-            if (visited[static_cast<std::size_t>(parent)]) {
-                addError(false, "bone hierarchy contains a cycle");
-                break;
-            }
-            visited[static_cast<std::size_t>(parent)] = true;
-            parent = model_.bones[static_cast<std::size_t>(parent)].parent;
-        }
+        addError(!internal::hasBoneDependencyCycle(model_.bones), "bone dependency graph contains a cycle");
     } else if (kind == ReferenceObjectKind::morph) {
         const auto &value = model_.morphs[index];
         addError(value.type <= 10, "unknown morph type");
@@ -1012,24 +990,11 @@ ValidationResult PmxDocument::validateProperty(ReferenceObjectKind kind, std::si
                              value.items[subIndex].bone ? model_.bones.size() : model_.morphs.size(), false),
                      "display frame index is out of range", static_cast<std::uint32_t>(subIndex));
     } else if (kind == ReferenceObjectKind::rigidBody) {
-        addError(inRange(model_.rigidBodies[index].bone, model_.bones.size()), "rigid body bone index is out of range");
+        internal::validateRigidBody(model_, model_.rigidBodies[index], reportPhysics);
     } else if (kind == ReferenceObjectKind::joint) {
-        const auto &value = model_.joints[index];
-        addError(inRange(value.bodyA, model_.rigidBodies.size()), "joint A body index is out of range");
-        addError(inRange(value.bodyB, model_.rigidBodies.size()), "joint B body index is out of range");
+        internal::validateJoint(model_, model_.joints[index], reportPhysics);
     } else if (kind == ReferenceObjectKind::softBody) {
-        const auto &value = model_.softBodies[index];
-        addError(model_.metadata.version >= 2.1F, "soft bodies require PMX 2.1");
-        addError(inRange(value.material, model_.materials.size()), "soft body material index is out of range");
-        for (std::size_t subIndex = 0; subIndex < value.anchors.size(); ++subIndex) {
-            addError(inRange(value.anchors[subIndex].rigidBody, model_.rigidBodies.size()),
-                     "soft body rigid body index is out of range", static_cast<std::uint32_t>(subIndex));
-            addError(inRange(value.anchors[subIndex].vertex, model_.vertices.size(), false),
-                     "soft body vertex index is out of range", static_cast<std::uint32_t>(subIndex));
-        }
-        for (std::size_t subIndex = 0; subIndex < value.pinnedVertices.size(); ++subIndex)
-            addError(inRange(value.pinnedVertices[subIndex], model_.vertices.size(), false),
-                     "soft body pinned vertex index is out of range", static_cast<std::uint32_t>(subIndex));
+        internal::validateSoftBody(model_, model_.softBodies[index], reportPhysics);
     }
     return result;
 }
@@ -1043,7 +1008,8 @@ ValidationResult PmxDocument::validate() const {
             issue.location.kind = kind;
             issue.location.id = handle.id;
             issue.location.generation = handle.generation;
-            issue.location.field = field;
+            if (issue.location.field.empty())
+                issue.location.field = field;
         };
         if (issue.location.kind != ReferenceObjectKind::model) {
             const auto index = static_cast<std::size_t>(issue.location.subIndex);
@@ -1417,7 +1383,7 @@ bool PmxDocument::Transaction::setBoneParent(BoneHandle child, std::optional<Bon
     auto &current = model_.bones[*c];
     const auto previous = current.parent;
     current.parent = static_cast<std::int32_t>(*p);
-    if (hasBoneDependencyCycle(model_.bones)) {
+    if (internal::hasBoneDependencyCycle(model_.bones)) {
         current.parent = previous;
         return false;
     }
@@ -1471,7 +1437,7 @@ bool PmxDocument::Transaction::setBoneInherit(BoneHandle bone, std::optional<Bon
         current.flags |= boneInheritTranslationFlag;
     current.inheritParent = static_cast<std::int32_t>(*p);
     current.inheritRatio = ratio;
-    if (hasBoneDependencyCycle(model_.bones)) {
+    if (internal::hasBoneDependencyCycle(model_.bones)) {
         current.flags = previousFlags;
         current.inheritParent = previousParent;
         current.inheritRatio = previousRatio;

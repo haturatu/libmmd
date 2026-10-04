@@ -996,6 +996,7 @@ struct MmdAnimator::Impl {
     std::vector<std::vector<std::size_t>> inheritDependents;
     std::vector<std::size_t> parentOrder;
     std::vector<std::size_t> parentRank;
+    std::vector<std::size_t> physicsBodyOrder;
     std::vector<std::size_t> beforePhysicsRank;
     std::vector<std::size_t> afterPhysicsRank;
     std::vector<std::uint8_t> dirtyBones;
@@ -1045,6 +1046,17 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
     impl_->afterPhysicsRank.assign(boneCount, boneCount);
     for (std::size_t rank = 0; rank < impl_->parentOrder.size(); ++rank)
         impl_->parentRank[impl_->parentOrder[rank]] = rank;
+    // Bindings and hierarchy are fixed for this animator; cache parent order
+    // once and filter runtime modes when applying physics results.
+    for (std::size_t index = 0; index < model_.rigidBodies.size(); ++index) {
+        const auto bone = model_.rigidBodies[index].bone;
+        if (bone >= 0 && static_cast<std::size_t>(bone) < boneCount)
+            impl_->physicsBodyOrder.push_back(index);
+    }
+    std::stable_sort(impl_->physicsBodyOrder.begin(), impl_->physicsBodyOrder.end(), [&](std::size_t a, std::size_t b) {
+        return impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[a].bone)] <
+               impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[b].bone)];
+    });
     for (std::size_t rank = 0; rank < impl_->boneOrders.beforePhysics.size(); ++rank)
         impl_->beforePhysicsRank[impl_->boneOrders.beforePhysics[rank]] = rank;
     for (std::size_t rank = 0; rank < impl_->boneOrders.afterPhysics.size(); ++rank)
@@ -1185,8 +1197,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                                            [&](const PmxBone &item) { return item.name == value.name; });
             if (bone != model_.bones.end()) {
                 const auto index = static_cast<std::size_t>(bone - model_.bones.begin());
-                local[index].translation = add(local[index].translation, value.translation);
-                local[index].rotation = multiply(local[index].rotation, value.rotation);
+                local[index].translation = value.translation;
+                local[index].rotation = value.rotation;
             }
         }
     }
@@ -1401,10 +1413,10 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             }
         }
         physics_->step(physicsDelta);
-        for (std::size_t bodyIndex = 0; bodyIndex < model_.rigidBodies.size(); ++bodyIndex) {
+        for (const auto bodyIndex : impl_->physicsBodyOrder) {
             const auto &body = model_.rigidBodies[bodyIndex];
             const auto mode = physics_->bodyMode(bodyIndex);
-            if (mode == 0 || body.bone < 0 || static_cast<std::size_t>(body.bone) >= global.size())
+            if (mode == 0)
                 continue;
             const auto bone = static_cast<std::size_t>(body.bone);
             physicsBones[bone] = true;
@@ -1416,7 +1428,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             // imports only the simulated rotation; its global translation
             // remains at the animated pre-physics position regardless of the
             // rigid body's bind offset. Use the snapshot because global[bone]
-            // may already contain a physics-updated mode 2 ancestor.
+            // may already contain a physics-updated ancestor. Nested mode 2
+            // bodies report effective mode 1 and follow the collision solution.
             Float3 targetBonePosition;
             if (mode == 2)
                 targetBonePosition = animatedBonePositions[bone];
