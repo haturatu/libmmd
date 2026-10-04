@@ -996,6 +996,7 @@ struct MmdAnimator::Impl {
     std::vector<std::vector<std::size_t>> inheritDependents;
     std::vector<std::size_t> parentOrder;
     std::vector<std::size_t> parentRank;
+    std::vector<std::size_t> physicsBodyOrder;
     std::vector<std::size_t> beforePhysicsRank;
     std::vector<std::size_t> afterPhysicsRank;
     std::vector<std::uint8_t> dirtyBones;
@@ -1045,6 +1046,17 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
     impl_->afterPhysicsRank.assign(boneCount, boneCount);
     for (std::size_t rank = 0; rank < impl_->parentOrder.size(); ++rank)
         impl_->parentRank[impl_->parentOrder[rank]] = rank;
+    // Bindings and hierarchy are fixed for this animator; cache parent order
+    // once and filter runtime modes when applying physics results.
+    for (std::size_t index = 0; index < model_.rigidBodies.size(); ++index) {
+        const auto bone = model_.rigidBodies[index].bone;
+        if (bone >= 0 && static_cast<std::size_t>(bone) < boneCount)
+            impl_->physicsBodyOrder.push_back(index);
+    }
+    std::stable_sort(impl_->physicsBodyOrder.begin(), impl_->physicsBodyOrder.end(), [&](std::size_t a, std::size_t b) {
+        return impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[a].bone)] <
+               impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[b].bone)];
+    });
     for (std::size_t rank = 0; rank < impl_->boneOrders.beforePhysics.size(); ++rank)
         impl_->beforePhysicsRank[impl_->boneOrders.beforePhysics[rank]] = rank;
     for (std::size_t rank = 0; rank < impl_->boneOrders.afterPhysics.size(); ++rank)
@@ -1401,21 +1413,11 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             }
         }
         physics_->step(physicsDelta);
-        // Apply parents first even when the PMX rigid-body array lists children
-        // first. Otherwise a later parent update moves an already solved child.
-        std::vector<std::size_t> dynamicBodies;
-        for (std::size_t index = 0; index < model_.rigidBodies.size(); ++index) {
-            const auto bone = model_.rigidBodies[index].bone;
-            if (physics_->bodyMode(index) != 0 && bone >= 0 && static_cast<std::size_t>(bone) < global.size())
-                dynamicBodies.push_back(index);
-        }
-        std::stable_sort(dynamicBodies.begin(), dynamicBodies.end(), [&](std::size_t a, std::size_t b) {
-            return impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[a].bone)] <
-                   impl_->parentRank[static_cast<std::size_t>(model_.rigidBodies[b].bone)];
-        });
-        for (const auto bodyIndex : dynamicBodies) {
+        for (const auto bodyIndex : impl_->physicsBodyOrder) {
             const auto &body = model_.rigidBodies[bodyIndex];
             const auto mode = physics_->bodyMode(bodyIndex);
+            if (mode == 0)
+                continue;
             const auto bone = static_cast<std::size_t>(body.bone);
             physicsBones[bone] = true;
             const auto bodyPose = physics_->bodyTransform(bodyIndex);
