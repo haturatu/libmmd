@@ -267,33 +267,7 @@ ValidationResult pmx::validate(const PmxModel &model) {
                                     "IK link limit contains non-finite values", ReferenceObjectKind::bone, boneIndex);
         }
     }
-    std::vector<std::vector<std::size_t>> dependents(model.bones.size());
-    std::vector<std::size_t> indegree(model.bones.size());
-    for (std::size_t child = 0; child < model.bones.size(); ++child) {
-        const auto addDependency = [&](std::int32_t parent) {
-            if (parent >= 0 && static_cast<std::size_t>(parent) < model.bones.size()) {
-                dependents[static_cast<std::size_t>(parent)].push_back(child);
-                ++indegree[child];
-            }
-        };
-        addDependency(model.bones[child].parent);
-        if ((model.bones[child].flags & 0x0300U) != 0)
-            addDependency(model.bones[child].inheritParent);
-    }
-    std::vector<std::size_t> pending;
-    for (std::size_t index = 0; index < indegree.size(); ++index)
-        if (indegree[index] == 0)
-            pending.push_back(index);
-    std::size_t visited{};
-    while (!pending.empty()) {
-        const auto index = pending.back();
-        pending.pop_back();
-        ++visited;
-        for (const auto child : dependents[index])
-            if (--indegree[child] == 0)
-                pending.push_back(child);
-    }
-    if (visited != model.bones.size())
+    if (internal::hasBoneDependencyCycle(model.bones))
         result.issues.push_back(
             {ValidationSeverity::error, ValidationCode::bone_cycle, {}, "bone dependency graph contains a cycle"});
     for (std::size_t morphIndex = 0; morphIndex < model.morphs.size(); ++morphIndex) {
@@ -321,9 +295,21 @@ ValidationResult pmx::validate(const PmxModel &model) {
         for (const auto &item : model.displayFrames[frameIndex].items)
             addIndexedError(result, inRange(item.index, item.bone ? model.bones.size() : model.morphs.size(), false),
                             "display frame index is out of range", ReferenceObjectKind::displayFrame, frameIndex);
+    const auto reportPhysics = [&](ReferenceObjectKind kind, std::size_t index) {
+        return
+            [&, kind, index](bool valid, ValidationCode code, const char *field, const char *message, std::uint32_t) {
+                if (valid)
+                    return;
+                ValidationIssue issue{ValidationSeverity::error, code, {}, message};
+                issue.location.kind = kind;
+                issue.location.field = field;
+                issue.location.subIndex = static_cast<std::uint32_t>(index);
+                result.issues.push_back(std::move(issue));
+            };
+    };
     for (std::size_t bodyIndex = 0; bodyIndex < model.rigidBodies.size(); ++bodyIndex)
-        addIndexedError(result, inRange(model.rigidBodies[bodyIndex].bone, model.bones.size()),
-                        "rigid body bone index is out of range", ReferenceObjectKind::rigidBody, bodyIndex);
+        internal::validateRigidBody(model, model.rigidBodies[bodyIndex],
+                                    reportPhysics(ReferenceObjectKind::rigidBody, bodyIndex));
     for (std::size_t jointIndex = 0; jointIndex < model.joints.size(); ++jointIndex) {
         const auto &joint = model.joints[jointIndex];
         addIndexedError(result, inRange(joint.bodyA, model.rigidBodies.size()), "joint A body index is out of range",
@@ -331,8 +317,8 @@ ValidationResult pmx::validate(const PmxModel &model) {
         addIndexedError(result, inRange(joint.bodyB, model.rigidBodies.size()), "joint B body index is out of range",
                         ReferenceObjectKind::joint, jointIndex);
     }
-    if (!model.softBodies.empty())
-        addError(result, model.metadata.version >= 2.1F, "soft bodies require PMX 2.1");
+    for (std::size_t index = 0; index < model.softBodies.size(); ++index)
+        internal::validateSoftBody(model, model.softBodies[index], reportPhysics(ReferenceObjectKind::softBody, index));
     return result;
 }
 

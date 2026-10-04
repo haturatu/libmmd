@@ -184,6 +184,17 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
         PRIVATE mmd::animation
     )
     add_test(NAME animation_hardening COMMAND libmmd_animation_hardening_tests)
+    add_executable(
+        libmmd_document_hardening_tests
+        tests/document_hardening_tests.cpp
+    )
+    target_link_libraries(
+        libmmd_document_hardening_tests
+        PRIVATE mmd::animation
+    )
+    libmmd_enable_warnings(libmmd_document_hardening_tests)
+    add_test(NAME document_hardening COMMAND libmmd_document_hardening_tests)
+
     if(LIBMMD_ENABLE_PHYSICS)
         add_executable(libmmd_physics_smoke_tests tests/physics_smoke_tests.cpp)
         target_link_libraries(
@@ -191,15 +202,34 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
             PRIVATE mmd::animation mmd::physics
         )
         add_test(NAME physics_smoke COMMAND libmmd_physics_smoke_tests)
-        add_executable(libmmd_physics_compatibility_tests tests/physics_compatibility_tests.cpp)
-        target_link_libraries(libmmd_physics_compatibility_tests PRIVATE mmd::animation mmd::physics)
+        add_executable(
+            libmmd_physics_compatibility_tests
+            tests/physics_compatibility_tests.cpp
+        )
+        target_link_libraries(
+            libmmd_physics_compatibility_tests
+            PRIVATE mmd::animation mmd::physics
+        )
         if(LIBMMD_HAS_BULLET)
-            target_include_directories(libmmd_physics_compatibility_tests PRIVATE src/internal)
-            target_include_directories(libmmd_physics_compatibility_tests SYSTEM PRIVATE ${BULLET_INCLUDE_DIRS})
-            target_link_libraries(libmmd_physics_compatibility_tests PRIVATE ${BULLET_LIBRARIES})
+            target_include_directories(
+                libmmd_physics_compatibility_tests
+                PRIVATE src/internal
+            )
+            target_include_directories(
+                libmmd_physics_compatibility_tests
+                SYSTEM
+                PRIVATE ${BULLET_INCLUDE_DIRS}
+            )
+            target_link_libraries(
+                libmmd_physics_compatibility_tests
+                PRIVATE ${BULLET_LIBRARIES}
+            )
         endif()
         libmmd_enable_warnings(libmmd_physics_compatibility_tests)
-        add_test(NAME physics_compatibility COMMAND libmmd_physics_compatibility_tests)
+        add_test(
+            NAME physics_compatibility
+            COMMAND libmmd_physics_compatibility_tests
+        )
     endif()
 
     file(

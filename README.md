@@ -9,8 +9,8 @@ target_link_libraries(app PRIVATE mmd::core mmd::animation mmd::physics)
 
 It is equally usable as a subdirectory. `mmd::core` has no SDL, Vulkan, FFmpeg, or Bullet requirement.
 
-For nested physics bones, mode 2 bodies whose immediate parent bone has a
-usable mode 1 or mode 2 body use effective mode 1. `bodyMode()` reports this
+For nested physics bones, mode 2 bodies connected by a usable joint to a mode
+1 or mode 2 body on their immediate parent bone use effective mode 1. `bodyMode()` reports this
 runtime mode; the source PMX stays unchanged. Standalone mode 2 bones retain
 animated translation. Bone results are applied in parent order.
 
@@ -50,3 +50,18 @@ build/libmmd_physics_compatibility_tests /path/to/Vivian.pmx
 It verifies the 150 main skirt boxes, 15 mode 2 roots and 135 effective mode 1
 children, skirt bone/body center agreement and finite mesh positions for 120
 simulation updates with each profile. The model is not included in the repo.
+
+`MmdAnimator::setPose()` overrides the VMD local translation and rotation of
+bones named in the VPD. Other bone and morph tracks continue to use the motion.
+`setPose(nullptr)` restores the motion, and either change resynchronizes physics.
+
+Document relation edits and global validation share a nonrecursive dependency
+cycle check covering parent and active inheritance edges. Each check is
+O(bones + edges); an incremental editor graph cache is not implemented.
+Transaction patch generation uses handle-table indexes for membership checks.
+
+Rigid-body property edits, transaction commits and saves share validation of
+shape/mode/group and every floating-point field. Soft-body material, anchor and
+pinned-vertex references use the same checks in all three paths. Optional
+material and anchor rigid-body references retain the editor's `-1` convention;
+anchor and pinned vertices must be valid vertex indices.
