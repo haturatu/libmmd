@@ -9,6 +9,7 @@
 #include <vector>
 
 #if LIBMMD_HAS_BULLET
+#include "bullet_compatibility.hpp"
 #include <btBulletDynamicsCommon.h>
 #endif
 
@@ -21,6 +22,7 @@ bool finiteVector(const Float3 &value) {
 } // namespace
 
 struct MmdPhysics::Impl {
+    PhysicsSettings settings;
 #if LIBMMD_HAS_BULLET
     std::unique_ptr<btDefaultCollisionConfiguration> collisionConfiguration;
     std::unique_ptr<btCollisionDispatcher> dispatcher;
@@ -107,7 +109,17 @@ PhysicsTransform transform(const btTransform &value) {
 } // namespace
 #endif
 
-MmdPhysics::MmdPhysics(const PmxModel &model) : impl_(std::make_unique<Impl>()) {
+MmdPhysics::MmdPhysics(const PmxModel &model) : MmdPhysics(model, PhysicsSettings{}) {}
+
+MmdPhysics::MmdPhysics(const PmxModel &model, const PhysicsSettings &settings) : impl_(std::make_unique<Impl>()) {
+    const auto &profile = settings.compatibility;
+    if (settings.solverIterations < 1 || settings.solverIterations > 1000 || !std::isfinite(settings.fixedTimeStep) ||
+        settings.fixedTimeStep < 1.0F / 10000.0F || settings.fixedTimeStep > 0.25F ||
+        !std::isfinite(profile.constraintForceMixing) || profile.constraintForceMixing < 0.0F ||
+        !std::isfinite(profile.stopErp) || profile.stopErp < 0.0F || profile.stopErp > 1.0F ||
+        (profile.useBullet275Constraint && profile.useFrameOffset))
+        throw std::invalid_argument("Invalid MMD physics settings");
+    impl_->settings = settings;
     const auto finiteValues = [](const auto &values) {
         return std::ranges::all_of(values, [](const float value) { return std::isfinite(value); });
     };
@@ -126,6 +138,8 @@ MmdPhysics::MmdPhysics(const PmxModel &model) : impl_(std::make_unique<Impl>()) 
     impl_->world = std::make_unique<btDiscreteDynamicsWorld>(impl_->dispatcher.get(), impl_->broadphase.get(),
                                                              impl_->solver.get(), impl_->collisionConfiguration.get());
     impl_->world->setGravity(vector(impl_->gravity));
+    impl_->world->getSolverInfo().m_numIterations = settings.solverIterations;
+    impl_->world->getSolverInfo().m_globalCfm = profile.constraintForceMixing;
     impl_->shapes.reserve(model.rigidBodies.size());
     impl_->motionStates.reserve(model.rigidBodies.size());
     impl_->bodies.reserve(model.rigidBodies.size());
@@ -267,7 +281,14 @@ MmdPhysics::MmdPhysics(const PmxModel &model) : impl_(std::make_unique<Impl>()) 
         const auto jointWorld = transform(source.position, source.rotation);
         const auto frameA = impl_->initialTransforms[bodyAIndex].inverse() * jointWorld;
         const auto frameB = impl_->initialTransforms[bodyBIndex].inverse() * jointWorld;
-        auto joint = std::make_unique<btGeneric6DofSpringConstraint>(*bodyA, *bodyB, frameA, frameB, true);
+        std::unique_ptr<btGeneric6DofSpringConstraint> joint;
+        if (profile.useBullet275Constraint)
+            joint = std::make_unique<internal::Bullet275SpringConstraint>(*bodyA, *bodyB, frameA, frameB, true);
+        else
+            joint = std::make_unique<btGeneric6DofSpringConstraint>(*bodyA, *bodyB, frameA, frameB, true);
+        joint->setUseFrameOffset(profile.useFrameOffset);
+        for (int axis = 0; axis < 6; ++axis)
+            joint->setParam(BT_CONSTRAINT_STOP_ERP, profile.stopErp, axis);
         joint->setLinearLowerLimit(vector(source.translationMinimum));
         joint->setLinearUpperLimit(vector(source.translationMaximum));
         joint->setAngularLowerLimit(vector(source.rotationMinimum));
@@ -440,7 +461,7 @@ void MmdPhysics::step(float deltaSeconds) {
                           std::sin(impl_->elapsed * impl_->gravityNoiseFrequency * 2.0F * std::numbers::pi_v<float>);
         }
         impl_->world->setGravity(vector(gravity));
-        constexpr float fixedStep = 1.0F / 120.0F;
+        const float fixedStep = impl_->settings.fixedTimeStep;
         const auto substeps = std::max(1, static_cast<int>(std::ceil(dt / fixedStep)));
         const auto substep = dt / static_cast<float>(substeps);
         for (int step = 0; step < substeps; ++step) {
