@@ -1197,8 +1197,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                                            [&](const PmxBone &item) { return item.name == value.name; });
             if (bone != model_.bones.end()) {
                 const auto index = static_cast<std::size_t>(bone - model_.bones.begin());
-                local[index].translation = add(local[index].translation, value.translation);
-                local[index].rotation = multiply(local[index].rotation, value.rotation);
+                local[index].translation = value.translation;
+                local[index].rotation = value.rotation;
             }
         }
     }
