@@ -515,14 +515,14 @@ void MmdPhysics::step(float deltaSeconds) {
             const auto &to = impl_->kinematicTargets[body];
             const auto angle = from.getRotation().angleShortestPath(to.getRotation());
             const auto distance = (to.getOrigin() - from.getOrigin()).length();
-            requestedMotionSteps = std::max({requestedMotionSteps,
-                std::ceil(static_cast<double>(angle) / impl_->settings.maxRotationPerStep),
-                std::ceil(static_cast<double>(distance) /
-                          std::max(0.001F, radius * impl_->settings.translationRadiusFraction))});
+            requestedMotionSteps = std::max(
+                {requestedMotionSteps, std::ceil(static_cast<double>(angle) / impl_->settings.maxRotationPerStep),
+                 std::ceil(static_cast<double>(distance) /
+                           std::max(0.001F, radius * impl_->settings.translationRadiusFraction))});
         }
         impl_->stats.motionBudgetExceeded = requestedMotionSteps > impl_->settings.maxAdaptiveSubsteps;
-        const auto motionSteps = static_cast<int>(std::min(requestedMotionSteps,
-                                                    static_cast<double>(impl_->settings.maxAdaptiveSubsteps)));
+        const auto motionSteps =
+            static_cast<int>(std::min(requestedMotionSteps, static_cast<double>(impl_->settings.maxAdaptiveSubsteps)));
         // The adaptive cap must never weaken the existing fixed-time budget.
         const auto substeps = std::max(timeSteps, motionSteps);
         impl_->stats.substeps = substeps;
@@ -546,7 +546,8 @@ void MmdPhysics::step(float deltaSeconds) {
                     const auto distance = manifold->getContactPoint(point).getDistance();
                     if (distance <= 0)
                         impl_->stats.contacts.push_back({manifold->getBody0()->getUserIndex(),
-                            manifold->getBody1()->getUserIndex(), static_cast<float>(-distance)});
+                                                         manifold->getBody1()->getUserIndex(),
+                                                         static_cast<float>(-distance)});
                 }
             }
         }
@@ -730,6 +731,8 @@ Float3 MmdPhysics::angularVelocity(std::size_t body) const {
 #endif
 }
 
-const PhysicsStepStats &MmdPhysics::stepStats() const noexcept { return impl_->stats; }
+const PhysicsStepStats &MmdPhysics::stepStats() const noexcept {
+    return impl_->stats;
+}
 
 } // namespace mmd
