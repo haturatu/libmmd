@@ -23,6 +23,8 @@ bool finiteVector(const Float3 &value) {
 
 struct MmdPhysics::Impl {
     PhysicsSettings settings;
+    PhysicsStepStats stats;
+    std::vector<float> adaptiveRadii;
 #if LIBMMD_HAS_BULLET
     void createRigidBodies(const PmxModel &model);
     [[nodiscard]] bool usableJoint(const PmxJoint &joint) const;
@@ -200,6 +202,7 @@ void MmdPhysics::Impl::createRigidBodies(const PmxModel &model) {
         constraintEndpointsUsable.push_back(constraintEndpointUsable ? 1U : 0U);
         bodies.back()->setSleepingThresholds(0.01F, 0.1F * std::numbers::pi_v<float> / 180.0F);
         bodies.back()->setActivationState(DISABLE_DEACTIVATION);
+        bodies.back()->setUserIndex(static_cast<int>(bodies.size() - 1));
         if (effectiveMode == 0) {
             bodies.back()->setCollisionFlags(bodies.back()->getCollisionFlags() |
                                              btCollisionObject::CF_KINEMATIC_OBJECT);
@@ -308,9 +311,22 @@ MmdPhysics::MmdPhysics(const PmxModel &model, const PhysicsSettings &settings) :
         settings.fixedTimeStep < 1.0F / 10000.0F || settings.fixedTimeStep > 0.25F ||
         !std::isfinite(profile.constraintForceMixing) || profile.constraintForceMixing < 0.0F ||
         !std::isfinite(profile.stopErp) || profile.stopErp < 0.0F || profile.stopErp > 1.0F ||
-        (profile.useBullet275Constraint && profile.useFrameOffset))
+        (profile.useBullet275Constraint && profile.useFrameOffset) || settings.maxAdaptiveSubsteps < 1 ||
+        settings.maxAdaptiveSubsteps > 4096 || !std::isfinite(settings.maxRotationPerStep) ||
+        settings.maxRotationPerStep <= 0 || !std::isfinite(settings.translationRadiusFraction) ||
+        settings.translationRadiusFraction <= 0)
         throw std::invalid_argument("Invalid MMD physics settings");
     impl_->settings = settings;
+    impl_->adaptiveRadii.resize(model.rigidBodies.size());
+    for (const auto index : settings.adaptiveKinematicBodies) {
+        if (index >= model.rigidBodies.size())
+            throw std::invalid_argument("Adaptive kinematic body index is out of range");
+        const auto &body = model.rigidBodies[index];
+        if (!body.physicsEnabled || body.mode != 0 || body.shape != 2 || !std::isfinite(body.size[0]) ||
+            std::abs(body.size[0]) < 0.001F)
+            throw std::invalid_argument("Adaptive kinematic body must be an enabled mode 0 capsule");
+        impl_->adaptiveRadii[index] = std::abs(body.size[0]);
+    }
     const auto finiteValues = [](const auto &values) {
         return std::ranges::all_of(values, [](const float value) { return std::isfinite(value); });
     };
@@ -452,6 +468,7 @@ std::uint8_t MmdPhysics::bodyMode(std::size_t body) const noexcept {
 }
 
 void MmdPhysics::reset() {
+    impl_->stats = {};
 #if LIBMMD_HAS_BULLET
     for (std::size_t i = 0; i < impl_->bodies.size(); ++i) {
         impl_->bodies[i]->setWorldTransform(impl_->initialTransforms[i]);
@@ -475,6 +492,7 @@ void MmdPhysics::reset() {
 }
 
 void MmdPhysics::step(float deltaSeconds) {
+    impl_->stats = {};
 #if LIBMMD_HAS_BULLET
     if (std::isfinite(deltaSeconds) && deltaSeconds > 0.0F) {
         const float dt = std::min(deltaSeconds, 0.25F);
@@ -486,7 +504,28 @@ void MmdPhysics::step(float deltaSeconds) {
         }
         impl_->world->setGravity(vector(gravity));
         const float fixedStep = impl_->settings.fixedTimeStep;
-        const auto substeps = std::max(1, static_cast<int>(std::ceil(dt / fixedStep)));
+        const auto timeSteps = std::max(1, static_cast<int>(std::ceil(dt / fixedStep)));
+        // Clamp before converting to int, including unusually large finite PMX motion.
+        double requestedMotionSteps = 1;
+        for (std::size_t body = 0; body < impl_->bodies.size(); ++body) {
+            const auto radius = impl_->adaptiveRadii[body];
+            if (radius <= 0 || impl_->modes[body] != 0 || impl_->kinematicDirty[body] == 0)
+                continue;
+            const auto &from = impl_->kinematicStarts[body];
+            const auto &to = impl_->kinematicTargets[body];
+            const auto angle = from.getRotation().angleShortestPath(to.getRotation());
+            const auto distance = (to.getOrigin() - from.getOrigin()).length();
+            requestedMotionSteps = std::max({requestedMotionSteps,
+                std::ceil(static_cast<double>(angle) / impl_->settings.maxRotationPerStep),
+                std::ceil(static_cast<double>(distance) /
+                          std::max(0.001F, radius * impl_->settings.translationRadiusFraction))});
+        }
+        impl_->stats.motionBudgetExceeded = requestedMotionSteps > impl_->settings.maxAdaptiveSubsteps;
+        const auto motionSteps = static_cast<int>(std::min(requestedMotionSteps,
+                                                    static_cast<double>(impl_->settings.maxAdaptiveSubsteps)));
+        // The adaptive cap must never weaken the existing fixed-time budget.
+        const auto substeps = std::max(timeSteps, motionSteps);
+        impl_->stats.substeps = substeps;
         const auto substep = dt / static_cast<float>(substeps);
         for (int step = 0; step < substeps; ++step) {
             const auto amount = static_cast<btScalar>(step + 1) / static_cast<btScalar>(substeps);
@@ -496,10 +535,20 @@ void MmdPhysics::step(float deltaSeconds) {
                 const auto world = interpolate(impl_->kinematicStarts[body], impl_->kinematicTargets[body], amount);
                 impl_->bodies[body]->setWorldTransform(world);
                 impl_->bodies[body]->getMotionState()->setWorldTransform(world);
-                impl_->bodies[body]->setInterpolationWorldTransform(world);
+                // saveKinematicState derives contact velocity from the PREVIOUS
+                // interpolation transform. Only reset/teleport may overwrite it.
                 impl_->world->updateSingleAabb(impl_->bodies[body].get());
             }
             impl_->world->stepSimulation(substep, 0, substep);
+            for (int manifoldIndex = 0; manifoldIndex < impl_->dispatcher->getNumManifolds(); ++manifoldIndex) {
+                const auto *manifold = impl_->dispatcher->getManifoldByIndexInternal(manifoldIndex);
+                for (int point = 0; point < manifold->getNumContacts(); ++point) {
+                    const auto distance = manifold->getContactPoint(point).getDistance();
+                    if (distance <= 0)
+                        impl_->stats.contacts.push_back({manifold->getBody0()->getUserIndex(),
+                            manifold->getBody1()->getUserIndex(), static_cast<float>(-distance)});
+                }
+            }
         }
         for (std::size_t body = 0; body < impl_->bodies.size(); ++body) {
             if (impl_->kinematicDirty[body] == 0)
@@ -658,5 +707,29 @@ PhysicsTransform MmdPhysics::bodyTransform(std::size_t body) const {
     return {};
 #endif
 }
+
+Float3 MmdPhysics::linearVelocity(std::size_t body) const {
+#if LIBMMD_HAS_BULLET
+    if (body >= impl_->bodies.size())
+        throw std::out_of_range("PMX rigid body index");
+    return vector(impl_->bodies[body]->getLinearVelocity());
+#else
+    static_cast<void>(body);
+    return {};
+#endif
+}
+
+Float3 MmdPhysics::angularVelocity(std::size_t body) const {
+#if LIBMMD_HAS_BULLET
+    if (body >= impl_->bodies.size())
+        throw std::out_of_range("PMX rigid body index");
+    return vector(impl_->bodies[body]->getAngularVelocity());
+#else
+    static_cast<void>(body);
+    return {};
+#endif
+}
+
+const PhysicsStepStats &MmdPhysics::stepStats() const noexcept { return impl_->stats; }
 
 } // namespace mmd

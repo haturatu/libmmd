@@ -31,6 +31,24 @@ struct PhysicsSettings {
     PhysicsCompatibilityProfile compatibility{};
     int solverIterations{10};
     float fixedTimeStep{1.0F / 120.0F};
+    // Opt-in capsule motion budget. Empty retains time-only stepping.
+    std::vector<std::size_t> adaptiveKinematicBodies;
+    int maxAdaptiveSubsteps{16};
+    float maxRotationPerStep{0.087266463F}; // five degrees
+    float translationRadiusFraction{0.25F};
+};
+
+struct PhysicsContact {
+    // -1 denotes the optional floor.
+    int bodyA{-1};
+    int bodyB{-1};
+    float penetration{};
+};
+
+struct PhysicsStepStats {
+    int substeps{};
+    bool motionBudgetExceeded{};
+    std::vector<PhysicsContact> contacts;
 };
 
 class MmdPhysics {
@@ -58,6 +76,9 @@ class MmdPhysics {
     void applyImpulse(std::size_t body, const Float3 &linear, const Float3 &angular, bool local);
     void clearMotion(std::size_t body);
     [[nodiscard]] PhysicsTransform bodyTransform(std::size_t body) const;
+    [[nodiscard]] Float3 linearVelocity(std::size_t body) const;
+    [[nodiscard]] Float3 angularVelocity(std::size_t body) const;
+    [[nodiscard]] const PhysicsStepStats &stepStats() const noexcept;
 
   private:
     struct Impl;

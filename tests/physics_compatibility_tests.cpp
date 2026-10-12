@@ -38,6 +38,18 @@ void settingsValidation() {
     settings.fixedTimeStep = 0;
     invalid(settings);
     settings = {};
+    settings.maxAdaptiveSubsteps = 0;
+    invalid(settings);
+    settings = {};
+    settings.maxRotationPerStep = std::numeric_limits<float>::quiet_NaN();
+    invalid(settings);
+    settings = {};
+    settings.translationRadiusFraction = 0;
+    invalid(settings);
+    settings = {};
+    settings.adaptiveKinematicBodies = {0};
+    invalid(settings);
+    settings = {};
     settings.compatibility.constraintForceMixing = -1;
     invalid(settings);
     settings = {};
@@ -89,6 +101,54 @@ mmd::PmxJoint link(int a, int b) {
     joint.rotationMinimum = {1, 1, 1};
     joint.rotationMaximum = {-1, -1, -1};
     return joint;
+}
+
+void kinematicMotionBudget() {
+    mmd::PmxModel model;
+    auto leg = body(-1, 0, {});
+    leg.shape = 2;
+    leg.size = {1, 2, 0};
+    leg.group = 0;
+    leg.collisionMask = 0xffff;
+    model.rigidBodies.push_back(leg);
+    auto skirt = body(-1, 1, {1.4F, 0, 0});
+    skirt.group = 14;
+    skirt.collisionMask = 1;
+    model.rigidBodies.push_back(skirt);
+    mmd::PhysicsSettings settings;
+    settings.adaptiveKinematicBodies = {0};
+    settings.solverIterations = 25;
+    mmd::MmdPhysics physics(model, settings);
+    physics.setGravity({});
+    const float halfAngle = 0.5F * 0.523598776F;
+    physics.setKinematicTransform(0, {{1, 0, 0}, {0, 0, std::sin(halfAngle), std::cos(halfAngle)}});
+    physics.step(1.0F / 30);
+    require(physics.stepStats().substeps >= 6, "rotation budget did not refine substeps");
+    require(std::abs(physics.linearVelocity(0)[0] - 30) < 0.01F, "kinematic translation velocity was erased");
+    require(std::abs(physics.angularVelocity(0)[2] - 15.707963F) < 0.01F, "kinematic angular velocity was erased");
+    require(!physics.stepStats().contacts.empty(), "moving capsule produced no skirt contacts");
+    for (const auto &contact : physics.stepStats().contacts) {
+        require((contact.bodyA == 0 && contact.bodyB == 1) || (contact.bodyA == 1 && contact.bodyB == 0),
+                "contact body indices lost PMX mapping");
+        require(std::isfinite(contact.penetration) && contact.penetration >= 0, "invalid contact depth");
+    }
+    physics.step(1.0F / 30);
+    near(physics.linearVelocity(0), {}, "stationary capsule retained translation velocity");
+    near(physics.angularVelocity(0), {}, "stationary capsule retained angular velocity");
+    physics.teleportBody(0, {{100, 0, 0}, {0, 0, 0, 1}});
+    physics.step(1.0F / 30);
+    near(physics.linearVelocity(0), {}, "teleport produced velocity spike");
+    require(physics.stepStats().substeps == 4, "teleport contaminated motion budget");
+    physics.setKinematicTransform(0, {{110, 0, 0}, {0, 0, 0, 1}});
+    physics.step(1.0F / 30);
+    require(physics.stepStats().substeps == 16 && physics.stepStats().motionBudgetExceeded,
+            "adaptive cap did not report saturation");
+    physics.step(0.25F);
+    require(physics.stepStats().substeps >= 30, "adaptive cap weakened fixed timestep");
+    physics.reset();
+    require(physics.stepStats().substeps == 0 && physics.stepStats().contacts.empty(), "reset retained diagnostics");
+    physics.step(std::numeric_limits<float>::quiet_NaN());
+    require(physics.stepStats().substeps == 0, "invalid timestep produced diagnostics");
 }
 
 void jointNormalization() {
@@ -376,6 +436,7 @@ int main(int argc, char **argv) {
     try {
         settingsValidation();
 #if LIBMMD_HAS_BULLET
+        kinematicMotionBudget();
         jointNormalization();
         nestedModes();
         collisionMovesMesh({});
