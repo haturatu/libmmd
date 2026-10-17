@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string_view>
 
 namespace {
@@ -54,6 +55,21 @@ bool rejectsPmx(const std::filesystem::path &path) {
         return true;
     }
     return false;
+}
+
+
+void writeNonFiniteVertex(const std::filesystem::path &path) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    appendPmxHeader(output, 1);
+    const std::array<float, 3> position{std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F};
+    const std::array<float, 3> normal{0.0F, 1.0F, 0.0F};
+    const std::array<float, 2> uv{};
+    appendBytes(output, position.data(), sizeof(position));
+    appendBytes(output, normal.data(), sizeof(normal));
+    appendBytes(output, uv.data(), sizeof(uv));
+    append(output, static_cast<std::uint8_t>(0)); // BDEF1
+    append(output, static_cast<std::int8_t>(-1));
+    append(output, 1.0F); // edge scale
 }
 
 void writeHugeVertexCount(const std::filesystem::path &path) {
@@ -128,6 +144,11 @@ int main() {
     writeHugeVertexCount(hugeVertexPath);
     ok &= check(rejectsPmx(hugeVertexPath), "rejects implausible vertex count");
     std::filesystem::remove(hugeVertexPath);
+
+    const auto nonFinitePath = std::filesystem::temp_directory_path() / "libmmd-pmx-nonfinite-vertex.pmx";
+    writeNonFiniteVertex(nonFinitePath);
+    ok &= check(rejectsPmx(nonFinitePath), "rejects non-finite PMX vertex before animation");
+    std::filesystem::remove(nonFinitePath);
 
     const auto minimalBonePath = std::filesystem::temp_directory_path() / "libmmd-pmx-minimal-bones.pmx";
     writeMinimalBones(minimalBonePath);
