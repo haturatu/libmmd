@@ -79,3 +79,30 @@ preserved when replacing an existing regular file. Replacement uses same-volume
 rename on POSIX and `MoveFileExW` on Windows, without a delete/copy fallback.
 Flush/close is not a guarantee of persistence through a power failure; file and
 directory fsync are not performed.
+
+### Editor pose snapshots
+
+`AnimatedModelFrame::BoneTransform` keeps its existing skinning `rotation` and
+`translation`. It also exposes the final solved `localTranslation`,
+`localRotation`, and `worldPosition` (PMX model space, before preview
+normalization), in both CPU and GPU skinning modes.
+
+`inputTranslation`, `inputRotation`, and `inputPhysics` describe the sampled VMD/VPD pose before
+morphs, append transforms, IK, and physics. Register these input values when
+editing motion keys, rather than baking solved deformation a second time.
+`inputPhysics` is a step value: the preceding key controls frames between keys,
+the new key controls its exact frame, and the first/last key controls frames
+outside the track. Missing tracks default to true; VPD only overrides the pose.
+Valid transient edits change runtime physics import, but leave the input snapshot
+unchanged. Animator-owned physics/attachment scratch retains its capacity across
+evaluations. Malformed parent cycles use the same deterministic root fallback
+for external attachments as for global bone evaluation.
+
+The optional fifth argument to `MmdAnimator::evaluate`, `BoneOverrides`, applies
+absolute transient input poses before runtime deformation. It does not mutate
+the model or motion. Invalid indices and nonfinite values are ignored; the last
+valid override wins. `physics = false` keeps that edited bone's animation pose
+instead of importing its simulated rigid-body transform. Omit the overrides to
+revert the preview.
+
+`ExternalParentTransforms` optionally replaces a bone's PMX parent with a supplied PMX model-space world pose (`childBone`, `parentPosition`, `parentRotation`) on solved bone subtrees before CPU/GPU skinning. Local authoring inputs remain unchanged; the original parent's translation/rotation is removed, nested attachments replace inherited corrections, and this post-solve attachment does not feed a different model's transform back into the local IK/physics simulation.

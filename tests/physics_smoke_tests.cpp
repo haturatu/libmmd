@@ -1,6 +1,7 @@
 #include <mmd/animation.hpp>
 #include <mmd/physics.hpp>
 
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -105,6 +106,39 @@ int main() {
         std::printf("FAIL: pose replacement did not reset unbound physics state\n");
         return 1;
     }
+    {
+        auto inputModel = syncModel;
+        inputModel.rigidBodies.resize(1);
+        inputModel.rigidBodies[0].mode = 1;
+        mmd::MmdPhysics inputPhysics(inputModel);
+        inputPhysics.setGravity({0, 0, 0});
+        mmd::MmdAnimator inputAnimator(inputModel);
+        mmd::VmdMotion inputMotion;
+        inputMotion.bones.push_back({.name = "animated", .translation = {1, 0, 0}, .physics = false});
+        inputAnimator.setMotion(&inputMotion);
+        inputAnimator.setPhysics(&inputPhysics);
+        static_cast<void>(inputAnimator.evaluate(0));
+        mmd::PhysicsTransform simulated;
+        simulated.position = {9, 0, 0};
+        inputPhysics.teleportBody(0, simulated);
+        const auto disabled = inputAnimator.evaluate(0);
+        if (disabled.bones[0].inputPhysics || std::abs(disabled.bones[0].worldPosition[0] - 1) > 1e-5F) {
+            std::printf("FAIL: disabled VMD physics imported the simulated bone\n");
+            return 1;
+        }
+        const std::array edits{mmd::BoneOverride{.index = 0, .translation = {2, 0, 0}, .physics = true}};
+        const auto enabled = inputAnimator.evaluate(0, 0, false, {}, edits);
+        if (enabled.bones[0].inputPhysics || std::abs(enabled.bones[0].worldPosition[0] - 9) > 1e-5F) {
+            std::printf("FAIL: preview physics override did not retain raw VMD input\n");
+            return 1;
+        }
+        const auto reverted = inputAnimator.evaluate(0);
+        if (std::abs(reverted.bones[0].worldPosition[0] - 1) > 1e-5F) {
+            std::printf("FAIL: removing preview override did not restore VMD physics state\n");
+            return 1;
+        }
+    }
+
 #else
     if (physics.available() || physics.bodyCount() != 0) {
         std::printf("FAIL: physics unexpectedly available without Bullet\n");

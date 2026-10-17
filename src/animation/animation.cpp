@@ -13,6 +13,7 @@
 #include <memory>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -285,12 +286,12 @@ LocalPose sampleBone(const std::vector<const VmdBoneKey *> &keys, float frame,
     return result;
 }
 
-LocalPose sampleBone(BoneTrack &track, const std::unordered_map<std::uint32_t, BezierLut> &luts, float frame,
-                     InterpolationMode fallbackMode = InterpolationMode::bezier) {
+LocalPose sampleBonePose(const BoneTrack &track, const std::unordered_map<std::uint32_t, BezierLut> &luts, float frame,
+                         std::size_t nextIndex, InterpolationMode fallbackMode) {
     const auto &keys = track.keys;
     if (keys.empty())
         return {};
-    const auto next = nextKey<VmdBoneKey>(track, frame);
+    const auto next = keys.begin() + static_cast<std::ptrdiff_t>(nextIndex);
     if (next == keys.begin())
         return {(*next)->translation, normalize((*next)->rotation)};
     if (next == keys.end())
@@ -298,7 +299,6 @@ LocalPose sampleBone(BoneTrack &track, const std::unordered_map<std::uint32_t, B
     const auto *before = *(next - 1);
     const auto *after = *next;
     const auto previousIndex = static_cast<std::size_t>((next - keys.begin()) - 1);
-    const auto nextIndex = static_cast<std::size_t>(next - keys.begin());
     const auto *previousControl = keys[previousIndex == 0 ? 0 : previousIndex - 1];
     const auto *nextControl = keys[std::min(nextIndex + 1, keys.size() - 1)];
     const float span = static_cast<float>(after->frame - before->frame);
@@ -353,6 +353,24 @@ float sampleMorph(MorphTrack &track, float frame) {
     const auto *after = *next;
     const float t = (frame - static_cast<float>(before->frame)) / static_cast<float>(after->frame - before->frame);
     return before->weight + (after->weight - before->weight) * t;
+}
+
+struct SampledBoneInput {
+    LocalPose pose;
+    bool physics{true};
+};
+
+SampledBoneInput sampleBoneInput(BoneTrack &track, const std::unordered_map<std::uint32_t, BezierLut> &luts,
+                                 float frame, InterpolationMode mode) {
+    if (track.keys.empty())
+        return {};
+    const auto next = static_cast<std::size_t>(nextKey<VmdBoneKey>(track, frame) - track.keys.begin());
+    const auto pose = sampleBonePose(track, luts, frame, next, mode);
+    const auto index = next >= track.keys.size()                             ? track.keys.size() - 1
+                       : next == 0                                           ? 0
+                       : frame < static_cast<float>(track.keys[next]->frame) ? next - 1
+                                                                             : next;
+    return {pose, track.keys[index]->physics};
 }
 
 void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local, std::vector<GlobalPose> &global,
@@ -989,6 +1007,11 @@ struct MmdAnimator::Impl {
     std::vector<LocalPose> localScratch;
     std::vector<GlobalPose> globalScratch;
     std::vector<std::uint8_t> globalState;
+    std::vector<std::uint8_t> physicsEnabled;
+    std::vector<std::optional<ExternalParentTransform>> externalDirect;
+    std::vector<std::optional<GlobalPose>> externalInherited;
+    std::vector<GlobalPose> externalOriginal;
+    std::vector<std::uint8_t> externalProcessed;
     std::unordered_map<std::string_view, BoneTrack> boneTracks;
     std::unordered_map<std::string_view, MorphTrack> morphTracks;
     std::unordered_map<std::uint32_t, BezierLut> bezierLuts;
@@ -1016,6 +1039,7 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
     impl_->localScratch.resize(model_.bones.size());
     impl_->globalScratch.resize(model_.bones.size());
     impl_->globalState.resize(model_.bones.size());
+    impl_->physicsEnabled.resize(model_.bones.size());
     impl_->boneChildren.resize(model_.bones.size());
     impl_->inheritDependents.resize(model_.bones.size());
     impl_->dirtyBones.resize(model_.bones.size());
@@ -1159,7 +1183,8 @@ MotionCompatibility MmdAnimator::motionCompatibility() const {
     return result;
 }
 
-AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides) {
+AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides,
+                                         BoneOverrides boneOverrides, ExternalParentTransforms externalParents) {
 #if !LIBMMD_ENABLE_PHYSICS
     static_cast<void>(deltaSeconds);
 #endif
@@ -1185,10 +1210,15 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
 
     auto &local = impl_->localScratch;
     std::fill(local.begin(), local.end(), LocalPose{});
+    auto &physicsEnabled = impl_->physicsEnabled;
+    std::fill(physicsEnabled.begin(), physicsEnabled.end(), std::uint8_t{1});
     for (std::size_t i = 0; i < model_.bones.size(); ++i) {
         if (const auto found = impl_->boneTracks.find(model_.bones[i].name); found != impl_->boneTracks.end()) {
-            local[i] = sampleBone(found->second, impl_->bezierLuts, frame,
-                                  motion_ == nullptr ? InterpolationMode::bezier : motion_->interpolation);
+            const auto sampled =
+                sampleBoneInput(found->second, impl_->bezierLuts, frame,
+                                motion_ == nullptr ? InterpolationMode::bezier : motion_->interpolation);
+            local[i] = sampled.pose;
+            physicsEnabled[i] = static_cast<std::uint8_t>(sampled.physics);
         }
     }
     if (pose_ != nullptr) {
@@ -1201,6 +1231,23 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 local[index].rotation = value.rotation;
             }
         }
+    }
+
+    result.bones.resize(local.size());
+    for (std::size_t index = 0; index < local.size(); ++index) {
+        result.bones[index].inputTranslation = local[index].translation;
+        result.bones[index].inputRotation = local[index].rotation;
+        result.bones[index].inputPhysics = physicsEnabled[index] != 0;
+    }
+
+    for (const auto &override : boneOverrides) {
+        if (override.index >= local.size() ||
+            !std::ranges::all_of(override.translation, [](float value) { return std::isfinite(value); }) ||
+            !std::ranges::all_of(override.rotation, [](float value) { return std::isfinite(value); }))
+            continue;
+        local[override.index].translation = override.translation;
+        local[override.index].rotation = normalize(override.rotation);
+        physicsEnabled[override.index] = static_cast<std::uint8_t>(override.physics);
     }
 
     std::vector<float> morphWeights(model_.morphs.size());
@@ -1416,7 +1463,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         for (const auto bodyIndex : impl_->physicsBodyOrder) {
             const auto &body = model_.rigidBodies[bodyIndex];
             const auto mode = physics_->bodyMode(bodyIndex);
-            if (mode == 0)
+            if (mode == 0 || !physicsEnabled[static_cast<std::size_t>(body.bone)])
                 continue;
             const auto bone = static_cast<std::size_t>(body.bone);
             physicsBones[bone] = true;
@@ -1489,13 +1536,62 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     }
     previousFrame_ = frame;
 
-    result.bones.reserve(global.size());
+    if (!externalParents.empty()) {
+        auto &direct = impl_->externalDirect;
+        auto &inherited = impl_->externalInherited;
+        auto &processed = impl_->externalProcessed;
+        auto &original = impl_->externalOriginal;
+        original.assign(global.begin(), global.end());
+        direct.assign(global.size(), std::nullopt);
+        inherited.assign(global.size(), std::nullopt);
+        processed.assign(global.size(), std::uint8_t{0});
+        for (auto parent : externalParents) {
+            if (parent.childBone >= global.size() || !finite(parent.parentPosition) || !finite(parent.parentRotation))
+                continue;
+            parent.parentRotation = normalize(parent.parentRotation);
+            direct[parent.childBone] = parent;
+        }
+        const auto apply = [&](std::size_t index) {
+            const auto parent = model_.bones[index].parent;
+            if (parent >= 0 && static_cast<std::size_t>(parent) < inherited.size() &&
+                processed[static_cast<std::size_t>(parent)] != 0)
+                inherited[index] = inherited[static_cast<std::size_t>(parent)];
+            if (direct[index]) {
+                // Only an already-processed PMX parent participated in the
+                // deterministic hierarchy solve (including malformed cycles).
+                GlobalPose originalParent;
+                if (parent >= 0 && static_cast<std::size_t>(parent) < original.size() &&
+                    processed[static_cast<std::size_t>(parent)] != 0)
+                    originalParent = original[static_cast<std::size_t>(parent)];
+                const auto &replacement = *direct[index];
+                const auto rotation =
+                    normalize(multiply(replacement.parentRotation, conjugate(originalParent.rotation)));
+                inherited[index] =
+                    GlobalPose{sub(replacement.parentPosition, rotate(rotation, originalParent.position)), rotation};
+            }
+            if (inherited[index]) {
+                const auto &correction = *inherited[index];
+                global[index].position =
+                    add(rotate(correction.rotation, original[index].position), correction.position);
+                global[index].rotation = normalize(multiply(correction.rotation, original[index].rotation));
+            }
+            processed[index] = 1;
+        };
+        for (const auto index : impl_->parentOrder)
+            apply(index);
+        for (std::size_t index = 0; index < global.size(); ++index)
+            if (processed[index] == 0)
+                apply(index);
+    }
+
     for (std::size_t index = 0; index < global.size(); ++index) {
-        AnimatedModelFrame::BoneTransform transform;
+        auto &transform = result.bones[index];
         transform.rotation = global[index].rotation;
         transform.translation =
             sub(global[index].position, rotate(global[index].rotation, model_.bones[index].position));
-        result.bones.push_back(transform);
+        transform.localTranslation = local[index].translation;
+        transform.localRotation = local[index].rotation;
+        transform.worldPosition = global[index].position;
     }
 
     for (auto &vertex : result.vertices) {
