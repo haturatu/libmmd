@@ -96,6 +96,18 @@ template <std::size_t N> std::array<float, N> readFloatArray(std::istream &input
     input.read(reinterpret_cast<char *>(value.data()), static_cast<std::streamsize>(sizeof(value)));
     if (!input)
         throw std::runtime_error("truncated PMX while reading " + std::string(field));
+    // Physics values have their own repair policy below; all other model
+    // fields must be finite before reaching animation or GPU buffers.
+    if (!field.starts_with("rigid body ") && !field.starts_with("joint ") &&
+        !std::ranges::all_of(value, [](float component) { return std::isfinite(component); }))
+        throw std::runtime_error("non-finite PMX " + std::string(field));
+    return value;
+}
+
+float readFiniteFloat(std::istream &input, std::string_view field) {
+    const float value = read<float>(input, field);
+    if (!std::isfinite(value))
+        throw std::runtime_error("non-finite PMX " + std::string(field));
     return value;
 }
 
@@ -265,7 +277,7 @@ void readVertices(std::istream &input, const Header &header, PmxModel &model, De
         case PmxWeightType::bdef2:
             vertex.bones[0] = bone();
             vertex.bones[1] = bone();
-            vertex.weights[0] = read<float>(input, "BDEF2 weight");
+            vertex.weights[0] = readFiniteFloat(input, "BDEF2 weight");
             vertex.weights[1] = 1.0F - vertex.weights[0];
             break;
         case PmxWeightType::bdef4:
@@ -277,14 +289,14 @@ void readVertices(std::istream &input, const Header &header, PmxModel &model, De
         case PmxWeightType::sdef:
             vertex.bones[0] = bone();
             vertex.bones[1] = bone();
-            vertex.weights[0] = read<float>(input, "SDEF weight");
+            vertex.weights[0] = readFiniteFloat(input, "SDEF weight");
             vertex.weights[1] = 1.0F - vertex.weights[0];
             vertex.sdefC = readFloatArray<3>(input, "SDEF C");
             vertex.sdefR0 = readFloatArray<3>(input, "SDEF R0");
             vertex.sdefR1 = readFloatArray<3>(input, "SDEF R1");
             break;
         }
-        vertex.edgeScale = read<float>(input, "edge scale");
+        vertex.edgeScale = readFiniteFloat(input, "edge scale");
     }
 }
 
@@ -301,11 +313,11 @@ void readMaterials(std::istream &input, const Header &header, PmxModel &model, D
         material.englishName = readText(input, header.metadata.textEncoding);
         material.diffuse = readFloatArray<4>(input, "material diffuse");
         material.specular = readFloatArray<3>(input, "material specular");
-        material.shininess = read<float>(input, "material shininess");
+        material.shininess = readFiniteFloat(input, "material shininess");
         material.ambient = readFloatArray<3>(input, "material ambient");
         material.drawFlags = read<std::uint8_t>(input, "material draw flags");
         material.edgeColor = readFloatArray<4>(input, "material edge color");
-        material.edgeSize = read<float>(input, "material edge size");
+        material.edgeSize = readFiniteFloat(input, "material edge size");
         material.textureIndex = readSignedIndex(input, header.settings[3], "texture index");
         material.sphereTextureIndex = readSignedIndex(input, header.settings[3], "sphere texture index");
         material.sphereMode = read<std::uint8_t>(input, "sphere mode");
@@ -338,7 +350,7 @@ void readBones(std::istream &input, const Header &header, PmxModel &model, Decod
             bone.tailOffset = readFloatArray<3>(input, "tail offset");
         if ((bone.flags & 0x0300U) != 0) {
             bone.inheritParent = readSignedIndex(input, header.settings[5], "inherit bone");
-            bone.inheritRatio = read<float>(input, "inherit ratio");
+            bone.inheritRatio = readFiniteFloat(input, "inherit ratio");
         }
         if ((bone.flags & 0x0400U) != 0)
             bone.fixedAxis = readFloatArray<3>(input, "fixed axis");
@@ -351,7 +363,7 @@ void readBones(std::istream &input, const Header &header, PmxModel &model, Decod
         if ((bone.flags & 0x0020U) != 0) {
             bone.ikTarget = readSignedIndex(input, header.settings[5], "IK target");
             bone.ikLoopCount = read<std::int32_t>(input, "IK loop count");
-            bone.ikLimitAngle = read<float>(input, "IK angle");
+            bone.ikLimitAngle = readFiniteFloat(input, "IK angle");
             const auto linkCount = readCount(input, "IK link count", 1'000'000);
             checkedResize(bone.ikLinks, static_cast<std::size_t>(linkCount), input,
                           static_cast<std::size_t>(header.settings[5]) + 1U, "IK link count", budget);
@@ -383,7 +395,7 @@ void readMorphs(std::istream &input, const Header &header, PmxModel &model, Deco
         for (auto &offset : morph.offsets) {
             if (morph.type == 0 || morph.type == 9) {
                 offset.index = readSignedIndex(input, header.settings[6], "group morph index");
-                offset.scalar = read<float>(input, "group morph weight");
+                offset.scalar = readFiniteFloat(input, "group morph weight");
             } else if (morph.type == 1) {
                 offset.index = static_cast<std::int32_t>(readVertexIndex(input, header.settings[2]));
                 offset.vector3 = readFloatArray<3>(input, "vertex morph offset");
@@ -399,11 +411,12 @@ void readMorphs(std::istream &input, const Header &header, PmxModel &model, Deco
                 offset.operation = read<std::uint8_t>(input, "material morph operation");
                 offset.materialVectors[0] = readFloatArray<4>(input, "morph diffuse");
                 const auto specular = readFloatArray<3>(input, "morph specular");
-                offset.materialVectors[1] = {specular[0], specular[1], specular[2], read<float>(input, "morph power")};
+                const auto power = readFiniteFloat(input, "morph power");
+                offset.materialVectors[1] = {specular[0], specular[1], specular[2], power};
                 const auto ambient = readFloatArray<3>(input, "morph ambient");
                 offset.materialVectors[2] = {ambient[0], ambient[1], ambient[2], 0.0F};
                 offset.materialVectors[3] = readFloatArray<4>(input, "morph edge color");
-                offset.materialVectors[2][3] = read<float>(input, "morph edge size");
+                offset.materialVectors[2][3] = readFiniteFloat(input, "morph edge size");
                 offset.materialVectors[4] = readFloatArray<4>(input, "morph texture");
                 offset.materialVectors[5] = readFloatArray<4>(input, "morph sphere");
                 offset.materialVectors[6] = readFloatArray<4>(input, "morph toon");
