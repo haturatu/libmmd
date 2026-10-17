@@ -5,8 +5,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <stdexcept>
 #include <limits>
+#include <stdexcept>
 #include <string_view>
 
 namespace {
@@ -57,7 +57,6 @@ bool rejectsPmx(const std::filesystem::path &path) {
     }
     return false;
 }
-
 
 void writeNonFiniteVertex(const std::filesystem::path &path) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
