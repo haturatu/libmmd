@@ -71,8 +71,8 @@ void writeNonFiniteVertex(const std::filesystem::path &path) {
     append(output, static_cast<std::uint8_t>(0)); // BDEF1
     append(output, static_cast<std::int8_t>(-1));
     append(output, 1.0F); // edge scale
-    for (int i = 0; i < 7; ++i)
-        append(output, static_cast<std::int32_t>(0)); // remaining empty PMX sections
+    for (int i = 0; i < 8; ++i)
+        append(output, static_cast<std::int32_t>(0)); // index, texture, material, bone, morph, display, body, joint
 }
 
 bool rejectsNonFinitePosition(const std::filesystem::path &path) {
