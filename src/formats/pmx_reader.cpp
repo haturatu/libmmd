@@ -411,7 +411,8 @@ void readMorphs(std::istream &input, const Header &header, PmxModel &model, Deco
                 offset.operation = read<std::uint8_t>(input, "material morph operation");
                 offset.materialVectors[0] = readFloatArray<4>(input, "morph diffuse");
                 const auto specular = readFloatArray<3>(input, "morph specular");
-                offset.materialVectors[1] = {specular[0], specular[1], specular[2], readFiniteFloat(input, "morph power")};
+                const auto power = readFiniteFloat(input, "morph power");
+                offset.materialVectors[1] = {specular[0], specular[1], specular[2], power};
                 const auto ambient = readFloatArray<3>(input, "morph ambient");
                 offset.materialVectors[2] = {ambient[0], ambient[1], ambient[2], 0.0F};
                 offset.materialVectors[3] = readFloatArray<4>(input, "morph edge color");
