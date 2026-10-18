@@ -1397,7 +1397,9 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 physics_->setKinematicTransform(bodyIndex, value);
             }
         }
-        const float impulseScale = physicsDelta * 60.0F;
+        // PMX impulse morphs specify an instantaneous impulse, not a force.
+        // Do not scale by the simulation time step (which changes with FPS).
+        constexpr float impulseScale = 1.0F;
         for (std::size_t body = 0; body < model_.rigidBodies.size(); ++body) {
             if (impulseReset[body]) {
                 physics_->clearMotion(body);
