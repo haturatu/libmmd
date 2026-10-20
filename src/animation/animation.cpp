@@ -888,14 +888,7 @@ bool skinQdef(PmxVertex &vertex, const PmxModel &model, const std::vector<Global
 
 } // namespace
 
-MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const float> rootWeights,
-                                        MorphExpansionLimits limits) {
-    MorphExpansionResult result;
-    result.effectiveWeights.resize(model.morphs.size());
-    std::vector<float> propagated(model.morphs.size());
-    for (std::size_t index = 0; index < std::min(model.morphs.size(), rootWeights.size()); ++index)
-        if (std::isfinite(rootWeights[index]))
-            propagated[index] = rootWeights[index];
+MorphWeightExpander::MorphWeightExpander(const PmxModel &model) : model_(model), propagated_(model.morphs.size()) {
     std::vector<std::size_t> indegree(model.morphs.size());
     std::vector<std::vector<std::size_t>> dependents(model.morphs.size());
     std::size_t groupCount{};
@@ -925,11 +918,43 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
             if (--indegree[child] == 0)
                 groupQueue.push_back(child);
     }
-    result.cycleDetected = visitedGroups != groupCount;
-    std::vector<bool> cyclic(model.morphs.size());
+    cycleDetected_ = visitedGroups != groupCount;
+    cyclic_.resize(model.morphs.size());
     for (std::size_t index = 0; index < model.morphs.size(); ++index)
-        cyclic[index] = (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] != 0;
+        cyclic_[index] = (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] != 0;
 
+    std::fill(indegree.begin(), indegree.end(), 0U);
+    for (std::size_t parent = 0; parent < model.morphs.size(); ++parent) {
+        if (cyclic_[parent] || (model.morphs[parent].type != 0 && model.morphs[parent].type != 9))
+            continue;
+        for (const auto child : dependents[parent])
+            if (!cyclic_[child])
+                ++indegree[child];
+    }
+    groupQueue.clear();
+    for (std::size_t index = 0; index < model.morphs.size(); ++index)
+        if (!cyclic_[index] && (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] == 0)
+            groupQueue.push_back(index);
+    while (!groupQueue.empty()) {
+        const auto parent = groupQueue.back();
+        groupQueue.pop_back();
+        order_.push_back(parent);
+        for (const auto child : dependents[parent])
+            if (!cyclic_[child] && --indegree[child] == 0)
+                groupQueue.push_back(child);
+    }
+}
+
+void MorphWeightExpander::expandInto(MorphExpansionResult &result, std::span<const float> rootWeights,
+                                     MorphExpansionLimits limits) {
+    const auto &model = model_;
+    std::fill(propagated_.begin(), propagated_.end(), 0.0F);
+    for (std::size_t index = 0; index < std::min(model.morphs.size(), rootWeights.size()); ++index)
+        if (std::isfinite(rootWeights[index]))
+            propagated_[index] = rootWeights[index];
+    result.effectiveWeights.assign(model.morphs.size(), 0.0F);
+    result.cycleDetected = cycleDetected_;
+    result.budgetExceeded = false;
     // A cyclic group is evaluated once for its direct leaf offsets.  Group
     // edges from or into that component are ignored, so malformed data cannot
     // re-enter the component or consume the expansion budget every frame.
@@ -945,45 +970,40 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
                 continue;
             const auto child = static_cast<std::size_t>(offset.index);
             const bool childGroup = model.morphs[child].type == 0 || model.morphs[child].type == 9;
-            if (childGroup && (!allowGroupChildren || cyclic[child]))
+            if (childGroup && (!allowGroupChildren || cyclic_[child]))
                 continue;
-            propagated[child] += propagated[parent] * offset.scalar;
+            propagated_[child] += propagated_[parent] * offset.scalar;
         }
         return true;
     };
     for (std::size_t index = 0; index < model.morphs.size() && !result.budgetExceeded; ++index)
-        if (cyclic[index] && std::isfinite(propagated[index]) && std::abs(propagated[index]) >= 1e-8F)
+        if (cyclic_[index] && std::isfinite(propagated_[index]) && std::abs(propagated_[index]) >= 1e-8F)
             static_cast<void>(propagate(index, false));
 
-    std::fill(indegree.begin(), indegree.end(), 0U);
-    for (std::size_t parent = 0; parent < model.morphs.size(); ++parent) {
-        if (cyclic[parent] || (model.morphs[parent].type != 0 && model.morphs[parent].type != 9))
-            continue;
-        for (const auto child : dependents[parent])
-            if (!cyclic[child])
-                ++indegree[child];
-    }
-    groupQueue.clear();
-    for (std::size_t index = 0; index < model.morphs.size(); ++index)
-        if (!cyclic[index] && (model.morphs[index].type == 0 || model.morphs[index].type == 9) && indegree[index] == 0)
-            groupQueue.push_back(index);
-    while (!groupQueue.empty() && !result.budgetExceeded) {
-        const auto parent = groupQueue.back();
-        groupQueue.pop_back();
-        const auto weight = propagated[parent];
+    for (const auto parent : order_) {
+        if (result.budgetExceeded)
+            break;
+        const auto weight = propagated_[parent];
         if (std::isfinite(weight) && std::abs(weight) >= 1e-8F && !propagate(parent, true))
             break;
-        for (const auto child : dependents[parent])
-            if (!cyclic[child] && --indegree[child] == 0)
-                groupQueue.push_back(child);
     }
     for (std::size_t index = 0; index < model.morphs.size(); ++index)
-        if (model.morphs[index].type != 0 && model.morphs[index].type != 9 && std::isfinite(propagated[index]))
-            result.effectiveWeights[index] = propagated[index];
+        if (model.morphs[index].type != 0 && model.morphs[index].type != 9 && std::isfinite(propagated_[index]))
+            result.effectiveWeights[index] = propagated_[index];
+}
+
+MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const float> rootWeights,
+                                        MorphExpansionLimits limits) {
+    MorphWeightExpander expander(model);
+    MorphExpansionResult result;
+    expander.expandInto(result, rootWeights, limits);
     return result;
 }
 
 struct MmdAnimator::Impl {
+    explicit Impl(const PmxModel &model) : morphExpander(model) {}
+    MorphWeightExpander morphExpander;
+    MorphExpansionResult morphExpansion;
     bool requiresCpuVertices{};
     BoneOrders boneOrders;
     std::vector<BoneRuntimePose> poses;
@@ -1011,7 +1031,7 @@ struct MmdAnimator::Impl {
     IkEvaluationStats ikStats;
 };
 
-MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make_unique<Impl>()) {
+MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make_unique<Impl>(model)) {
     impl_->requiresCpuVertices =
         !model_.softBodies.empty() ||
         std::ranges::any_of(model_.morphs, [](const auto &morph) { return morph.type >= 3 && morph.type <= 7; });
@@ -1320,7 +1340,8 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             }
         }
     };
-    const auto expansion = expandMorphWeights(model_, morphWeights);
+    impl_->morphExpander.expandInto(impl_->morphExpansion, morphWeights);
+    const auto &expansion = impl_->morphExpansion;
     if (expansion.budgetExceeded)
         log::warn("Morph expansion budget exceeded");
     for (std::size_t index = 0; index < expansion.effectiveWeights.size(); ++index)
