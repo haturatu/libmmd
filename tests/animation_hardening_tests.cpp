@@ -244,6 +244,48 @@ int main() {
         assert(std::all_of(frame.bones[0].rotation.begin(), frame.bones[0].rotation.end(),
                            [](const float value) { return std::isfinite(value); }));
     }
+    // Cached topology preserves the expansion order and cycle/budget policy,
+    // while every frame resets propagation, flags and effective weights.
+    {
+        mmd::PmxModel graph;
+        graph.morphs = {
+            {.name = "root", .type = 0, .offsets = {{.index = 1, .scalar = 0.5F}, {.index = 2, .scalar = 2.0F}}},
+            {.name = "leaf", .type = 1},
+            {.name = "flip", .type = 9, .offsets = {{.index = 1, .scalar = 0.5F}}},
+        };
+        mmd::MorphWeightExpander cache(graph);
+        mmd::MorphExpansionResult result;
+        for (unsigned iteration = 0; iteration < 10; ++iteration) {
+            const std::array<float, 3> roots{iteration % 2 == 0 ? 1.0F : 0.0F, 0.0F, 0.0F};
+            for (std::uint64_t budget : {0U, 1U, 2U, 3U, 100U}) {
+                const auto expected = mmd::expandMorphWeights(graph, roots, {budget});
+                cache.expandInto(result, roots, {budget});
+                assert(result.effectiveWeights == expected.effectiveWeights);
+                assert(result.budgetExceeded == expected.budgetExceeded);
+                assert(result.cycleDetected == expected.cycleDetected);
+            }
+        }
+        const auto *storage = result.effectiveWeights.data();
+        cache.expandInto(result, rootWeights);
+        assert(result.effectiveWeights.data() == storage && result.effectiveWeights[1] == 1.5F);
+        cache.expandInto(result, result.effectiveWeights);
+        assert(result.effectiveWeights[1] == 1.5F); // aliased root input is read before output reset
+        const std::array<float, 3> nanRoots{std::numeric_limits<float>::quiet_NaN(), 0, 0};
+        cache.expandInto(result, nanRoots);
+        assert(result.effectiveWeights[1] == 0 && !result.budgetExceeded);
+
+        mmd::PmxModel cyclic;
+        cyclic.morphs = {
+            {.name = "cycle", .type = 0, .offsets = {{.index = 0, .scalar = 1}, {.index = 1, .scalar = 2}}},
+            {.name = "leaf", .type = 1}};
+        mmd::MorphWeightExpander cycleCache(cyclic);
+        cycleCache.expandInto(result, selfRoot, {.maxSteps = 1});
+        assert(result.cycleDetected && result.budgetExceeded && result.effectiveWeights[1] == 0);
+        cycleCache.expandInto(result, selfRoot, {.maxSteps = 2});
+        assert(result.cycleDetected && !result.budgetExceeded && result.effectiveWeights[1] == 2);
+        cycleCache.expandInto(result, {});
+        assert(result.cycleDetected && !result.budgetExceeded && result.effectiveWeights[1] == 0);
+    }
     // Opting out is allowed only for unchanged GPU bind attributes. Public
     // callers retain the original full-output default and CPU skinning path.
     {

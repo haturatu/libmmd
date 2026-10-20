@@ -64,6 +64,21 @@ struct MorphExpansionResult {
 [[nodiscard]] MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const float> rootWeights,
                                                       MorphExpansionLimits limits = {});
 
+// Bind to an immutable model once, retaining its group order and cycle mask.
+// expandInto reuses caller output and internal propagation storage across frames.
+class MorphWeightExpander {
+  public:
+    explicit MorphWeightExpander(const PmxModel &model);
+    void expandInto(MorphExpansionResult &result, std::span<const float> rootWeights, MorphExpansionLimits limits = {});
+
+  private:
+    const PmxModel &model_;
+    std::vector<std::uint8_t> cyclic_;
+    std::vector<std::size_t> order_;
+    std::vector<float> propagated_;
+    bool cycleDetected_{};
+};
+
 // IK evaluation is bounded per frame, including models with both pre- and
 // post-physics IK phases. Limits are configurable for applications that need
 // to accommodate unusually dense rigs while retaining deterministic defaults.
