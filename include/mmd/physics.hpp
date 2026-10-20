@@ -36,6 +36,9 @@ struct PhysicsSettings {
     int maxAdaptiveSubsteps{16};
     float maxRotationPerStep{0.087266463F}; // five degrees
     float translationRadiusFraction{0.25F};
+    // Keep public stepStats contacts by default. Applications that only need
+    // substeps/budget flags can skip diagnostic manifold traversal and copies.
+    bool collectContactDiagnostics{true};
 };
 
 struct PhysicsContact {
