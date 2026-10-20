@@ -133,6 +133,7 @@ class MmdAnimator {
     explicit MmdAnimator(const PmxModel &model);
     ~MmdAnimator();
 
+    // Rebind after replacing or editing motion tracks or pose entries.
     void setMotion(const VmdMotion *motion);
     // VPD replaces the VMD local translation/rotation of matching bones.
     // Unspecified bones and morph tracks retain their motion; nullptr removes
@@ -146,6 +147,11 @@ class MmdAnimator {
     [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false,
                                               MorphOverrides overrides = {},
                                               VertexOutput vertexOutput = VertexOutput::full);
+
+    // The caller owns the output; all values are reset while vector capacity is
+    // retained. evaluate() remains the independent, value-returning API.
+    void evaluateInto(AnimatedModelFrame &result, float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false,
+                      MorphOverrides overrides = {}, VertexOutput vertexOutput = VertexOutput::full);
 
   private:
     struct Impl;

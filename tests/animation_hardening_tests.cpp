@@ -244,6 +244,63 @@ int main() {
         assert(std::all_of(frame.bones[0].rotation.begin(), frame.bones[0].rotation.end(),
                            [](const float value) { return std::isfinite(value); }));
     }
+    // Track/pose bindings survive replacement, clearing, missing names and
+    // duplicate names without retaining stale sampling cursors or output.
+    {
+        mmd::PmxModel source;
+        source.bones.resize(3);
+        source.bones[0].name = "bone";
+        source.bones[1].name = "bone";
+        source.bones[2].name = "missing";
+        source.vertices.resize(1);
+        source.vertices[0].bones[0] = 0;
+        source.materials.resize(1);
+        source.materials[0].diffuse = {1, 1, 1, 1};
+        source.morphs = {{.name = "morph", .type = 1, .offsets = {{.index = 0, .vector3 = {1, 0, 0}}}},
+                         {.name = "missing", .type = 1}};
+        mmd::VmdMotion first;
+        first.bones.resize(2);
+        first.bones[0].name = "bone";
+        first.bones[1].name = "bone";
+        first.bones[1].frame = 29;
+        first.bones[1].translation = {2, 0, 0};
+        first.morphs = {{"morph", 0, 1}};
+        first.ik = {{.frame = 0, .visible = false}};
+        mmd::MmdAnimator animator(source);
+        animator.setMotion(&first);
+        mmd::AnimatedModelFrame reused;
+        animator.evaluateInto(reused, 30, 0, true);
+        assert(reused.bones[0].translation[0] == 2 && reused.bones[1].translation[0] == 2);
+        assert(reused.bones[2].translation[0] == 0 && reused.morphWeights[0] == 1 && reused.morphWeights[1] == 0);
+        assert(!reused.visible);
+        const auto *bones = reused.bones.data();
+        const auto *materials = reused.materials.data();
+        const auto retained = animator.evaluate(30, 0, true);
+        mmd::VpdPose pose;
+        pose.bones = {{.name = "bone", .translation = {1, 0, 0}},
+                      {.name = "bone", .translation = {3, 0, 0}},
+                      {.name = "absent", .translation = {9, 0, 0}}};
+        animator.setPose(&pose);
+        animator.evaluateInto(reused, 30, 0, true, {}, mmd::VertexOutput::omitUnchangedGpu);
+        assert(reused.vertices.empty() && reused.bones[0].translation[0] == 3 && reused.bones[1].translation[0] == 2);
+        assert(reused.bones.data() == bones && reused.materials.data() == materials);
+        assert(retained.vertices.size() == 1 && retained.bones[0].translation[0] == 2);
+        animator.setPose(nullptr);
+        mmd::VmdMotion second;
+        second.bones.resize(1);
+        second.bones[0].name = "bone";
+        second.bones[0].translation = {-4, 0, 0};
+        animator.setMotion(&second);
+        animator.evaluateInto(reused, 0, 0, true);
+        assert(reused.bones[0].translation[0] == -4 && reused.morphWeights[0] == 0 && reused.visible);
+        animator.setMotion(nullptr);
+        animator.evaluateInto(reused, 0, 0, false);
+        assert(reused.vertices.size() == 1 && reused.morphWeights.empty() && reused.bones[0].translation[0] == 0);
+        assert(reused.visible && reused.materials[0].diffuse == source.materials[0].diffuse);
+        animator.setMotion(&first);
+        animator.evaluateInto(reused, 30, 0, true);
+        assert(reused.morphWeights[0] == 1 && reused.bones[0].translation[0] == 2 && !reused.visible);
+    }
     // Cached topology preserves the expansion order and cycle/budget policy,
     // while every frame resets propagation, flags and effective weights.
     {
