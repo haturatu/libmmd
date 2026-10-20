@@ -468,7 +468,9 @@ std::uint8_t MmdPhysics::bodyMode(std::size_t body) const noexcept {
 }
 
 void MmdPhysics::reset() {
-    impl_->stats = {};
+    impl_->stats.substeps = 0;
+    impl_->stats.motionBudgetExceeded = false;
+    impl_->stats.contacts.clear();
 #if LIBMMD_HAS_BULLET
     for (std::size_t i = 0; i < impl_->bodies.size(); ++i) {
         impl_->bodies[i]->setWorldTransform(impl_->initialTransforms[i]);
@@ -492,7 +494,9 @@ void MmdPhysics::reset() {
 }
 
 void MmdPhysics::step(float deltaSeconds) {
-    impl_->stats = {};
+    impl_->stats.substeps = 0;
+    impl_->stats.motionBudgetExceeded = false;
+    impl_->stats.contacts.clear();
 #if LIBMMD_HAS_BULLET
     if (std::isfinite(deltaSeconds) && deltaSeconds > 0.0F) {
         const float dt = std::min(deltaSeconds, 0.25F);
@@ -540,6 +544,8 @@ void MmdPhysics::step(float deltaSeconds) {
                 impl_->world->updateSingleAabb(impl_->bodies[body].get());
             }
             impl_->world->stepSimulation(substep, 0, substep);
+            if (!impl_->settings.collectContactDiagnostics)
+                continue;
             for (int manifoldIndex = 0; manifoldIndex < impl_->dispatcher->getNumManifolds(); ++manifoldIndex) {
                 const auto *manifold = impl_->dispatcher->getManifoldByIndexInternal(manifoldIndex);
                 for (int point = 0; point < manifold->getNumContacts(); ++point) {

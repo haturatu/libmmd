@@ -151,6 +151,55 @@ void kinematicMotionBudget() {
     require(physics.stepStats().substeps == 0, "invalid timestep produced diagnostics");
 }
 
+void contactDiagnosticControl() {
+    require(mmd::PhysicsSettings{}.collectContactDiagnostics, "public diagnostics default must remain enabled");
+    mmd::PmxModel model;
+    auto leg = body(-1, 0, {});
+    leg.shape = 2;
+    leg.size = {1, 2, 0};
+    leg.collisionMask = 0xffff;
+    auto skirt = body(-1, 1, {1.4F, 0, 0});
+    skirt.collisionMask = 0xffff;
+    model.rigidBodies = {leg, skirt};
+    mmd::PhysicsSettings settings;
+    settings.adaptiveKinematicBodies = {0};
+    mmd::MmdPhysics enabled(model, settings);
+    settings.collectContactDiagnostics = false;
+    mmd::MmdPhysics disabled(model, settings);
+    enabled.setGravity({});
+    disabled.setGravity({});
+    std::size_t contacts = 0;
+    for (unsigned frame = 0; frame < 120; ++frame) {
+        const float amount = static_cast<float>(frame) * 0.1F;
+        const mmd::PhysicsTransform target{{2 * std::sin(amount), 0, 0}, {0, 0, std::sin(amount), std::cos(amount)}};
+        enabled.setKinematicTransform(0, target);
+        disabled.setKinematicTransform(0, target);
+        enabled.step(1.0F / 60.0F);
+        disabled.step(1.0F / 60.0F);
+        contacts += enabled.stepStats().contacts.size();
+        require(disabled.stepStats().contacts.empty(), "disabled diagnostics retained contacts");
+        require(enabled.stepStats().substeps == disabled.stepStats().substeps &&
+                    enabled.stepStats().motionBudgetExceeded == disabled.stepStats().motionBudgetExceeded,
+                "diagnostic toggle changed stepping or budget flags");
+        for (std::size_t index = 0; index < model.rigidBodies.size(); ++index) {
+            require(enabled.bodyTransform(index).position == disabled.bodyTransform(index).position &&
+                        enabled.bodyTransform(index).rotation == disabled.bodyTransform(index).rotation &&
+                        enabled.linearVelocity(index) == disabled.linearVelocity(index) &&
+                        enabled.angularVelocity(index) == disabled.angularVelocity(index),
+                    "diagnostic toggle changed rigid-body motion");
+        }
+    }
+    require(contacts > 0, "contact fixture did not exercise manifold diagnostics");
+    enabled.step(0);
+    disabled.step(std::numeric_limits<float>::quiet_NaN());
+    require(enabled.stepStats().contacts.empty() && disabled.stepStats().substeps == 0 &&
+                !disabled.stepStats().motionBudgetExceeded,
+            "invalid timestep retained frame diagnostics");
+    enabled.reset();
+    disabled.reset();
+    require(enabled.stepStats().contacts.empty() && disabled.stepStats().contacts.empty(), "reset retained contacts");
+}
+
 void jointNormalization() {
     for (int scenario = 0; scenario < 9; ++scenario) {
         mmd::PmxModel model;
@@ -437,6 +486,7 @@ int main(int argc, char **argv) {
         settingsValidation();
 #if LIBMMD_HAS_BULLET
         kinematicMotionBudget();
+        contactDiagnosticControl();
         jointNormalization();
         nestedModes();
         collisionMovesMesh({});
