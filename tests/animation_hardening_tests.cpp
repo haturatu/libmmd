@@ -244,5 +244,49 @@ int main() {
         assert(std::all_of(frame.bones[0].rotation.begin(), frame.bones[0].rotation.end(),
                            [](const float value) { return std::isfinite(value); }));
     }
+    // Opting out is allowed only for unchanged GPU bind attributes. Public
+    // callers retain the original full-output default and CPU skinning path.
+    {
+        mmd::PmxModel source;
+        source.bones.resize(1);
+        source.vertices.resize(1);
+        source.vertices[0].bones[0] = 0;
+        source.vertices[0].position = {1.0F, 2.0F, 3.0F};
+        source.materials.resize(1);
+        source.materials[0].diffuse = {0.2F, 0.3F, 0.4F, 1.0F};
+        source.morphs = {{.name = "vertex", .type = 1, .offsets = {{.index = 0, .vector3 = {0.5F, 0.0F, 0.0F}}}}};
+        const std::array<mmd::MorphOverride, 1> overrides{{{.index = 0, .weight = 1.0F}}};
+        mmd::MmdAnimator animator(source);
+        const auto full = animator.evaluate(0, 0, true, overrides);
+        const auto omitted = animator.evaluate(0, 0, true, overrides, mmd::VertexOutput::omitUnchangedGpu);
+        assert(full.vertices.size() == 1 && omitted.vertices.empty());
+        assert(full.morphWeights == omitted.morphWeights && omitted.morphWeights[0] == 1.0F);
+        assert(full.bones[0].translation == omitted.bones[0].translation);
+        assert(full.materials[0].diffuse == omitted.materials[0].diffuse);
+        const auto cpu = animator.evaluate(0, 0, false, overrides, mmd::VertexOutput::omitUnchangedGpu);
+        assert(cpu.vertices.size() == 1 && cpu.vertices[0].position[0] == 1.5F);
+        const std::array<mmd::MorphOverride, 1> temporary{
+            {{.index = mmd::MorphOverride::temporary, .weight = 1.0F, .type = 1, .offsets = source.morphs[0].offsets}}};
+        assert(animator.evaluate(0, 0, true, temporary, mmd::VertexOutput::omitUnchangedGpu).vertices[0].position[0] ==
+               1.5F);
+        for (std::uint8_t type = 3; type <= 7; ++type) {
+            auto uvSource = source;
+            uvSource.morphs[0].type = type;
+            uvSource.morphs[0].offsets[0].vector4 = {0.25F, 0.5F, 0.75F, 1.0F};
+            mmd::MmdAnimator uvAnimator(uvSource);
+            const auto uvFull = uvAnimator.evaluate(0, 0, true, overrides);
+            const auto uvOptimized = uvAnimator.evaluate(0, 0, true, overrides, mmd::VertexOutput::omitUnchangedGpu);
+            assert(uvOptimized.vertices.size() == 1);
+            assert(uvFull.vertices[0].uv == uvOptimized.vertices[0].uv);
+            assert(uvFull.vertices[0].additionalUv == uvOptimized.vertices[0].additionalUv);
+            if (type == 3)
+                assert(uvOptimized.vertices[0].uv[0] == 0.25F);
+            else
+                assert(uvOptimized.vertices[0].additionalUv[type - 4][0] == 0.25F);
+        }
+        source.softBodies.resize(1);
+        mmd::MmdAnimator softAnimator(source);
+        assert(softAnimator.evaluate(0, 0, true, {}, mmd::VertexOutput::omitUnchangedGpu).vertices.size() == 1);
+    }
     return 0;
 }

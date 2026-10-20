@@ -984,6 +984,7 @@ MorphExpansionResult expandMorphWeights(const PmxModel &model, std::span<const f
 }
 
 struct MmdAnimator::Impl {
+    bool requiresCpuVertices{};
     BoneOrders boneOrders;
     std::vector<BoneRuntimePose> poses;
     std::vector<LocalPose> localScratch;
@@ -1011,6 +1012,9 @@ struct MmdAnimator::Impl {
 };
 
 MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make_unique<Impl>()) {
+    impl_->requiresCpuVertices =
+        !model_.softBodies.empty() ||
+        std::ranges::any_of(model_.morphs, [](const auto &morph) { return morph.type >= 3 && morph.type <= 7; });
     impl_->boneOrders = makeBoneOrders(model_);
     impl_->poses.resize(model_.bones.size());
     impl_->localScratch.resize(model_.bones.size());
@@ -1159,13 +1163,17 @@ MotionCompatibility MmdAnimator::motionCompatibility() const {
     return result;
 }
 
-AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides) {
+AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides,
+                                         VertexOutput vertexOutput) {
 #if !LIBMMD_ENABLE_PHYSICS
     static_cast<void>(deltaSeconds);
 #endif
     AnimatedModelFrame result;
     IkEvaluationBudget ikBudget{impl_->ikLimits, {}};
-    result.vertices = model_.vertices;
+    const bool temporaryVertices = std::ranges::any_of(
+        overrides, [](const auto &value) { return value.index == MorphOverride::temporary && value.type == 1; });
+    if (!gpuSkinning || vertexOutput == VertexOutput::full || impl_->requiresCpuVertices || temporaryVertices)
+        result.vertices = model_.vertices;
     result.materials.reserve(model_.materials.size());
     for (const auto &material : model_.materials) {
         AnimatedModelFrame::Material animated;
