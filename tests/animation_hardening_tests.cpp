@@ -279,6 +279,10 @@ int main() {
             assert(uvOptimized.vertices.size() == 1);
             assert(uvFull.vertices[0].uv == uvOptimized.vertices[0].uv);
             assert(uvFull.vertices[0].additionalUv == uvOptimized.vertices[0].additionalUv);
+            if (type == 3)
+                assert(uvOptimized.vertices[0].uv[0] == 0.25F);
+            else
+                assert(uvOptimized.vertices[0].additionalUv[type - 4][0] == 0.25F);
         }
         source.softBodies.resize(1);
         mmd::MmdAnimator softAnimator(source);
