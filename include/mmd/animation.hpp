@@ -108,6 +108,11 @@ struct MorphOverride {
 
 using MorphOverrides = std::span<const MorphOverride>;
 
+// Applications with a static GPU vertex buffer can omit unchanged bind-space
+// vertices. UV/additional-UV morphs, soft bodies and temporary vertex offsets
+// conservatively retain full output; CPU skinning always retains full output.
+enum class VertexOutput { full, omitUnchangedGpu };
+
 class MmdAnimator {
   public:
     explicit MmdAnimator(const PmxModel &model);
@@ -124,7 +129,8 @@ class MmdAnimator {
     [[nodiscard]] IkEvaluationStats ikEvaluationStats() const noexcept;
     [[nodiscard]] MotionCompatibility motionCompatibility() const;
     [[nodiscard]] AnimatedModelFrame evaluate(float frame, float deltaSeconds = 0.0F, bool gpuSkinning = false,
-                                              MorphOverrides overrides = {});
+                                              MorphOverrides overrides = {},
+                                              VertexOutput vertexOutput = VertexOutput::full);
 
   private:
     struct Impl;
