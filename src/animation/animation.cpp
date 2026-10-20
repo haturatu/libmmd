@@ -16,6 +16,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace mmd {
 namespace {
@@ -384,9 +385,11 @@ void calculateGlobals(const PmxModel &model, const std::vector<LocalPose> &local
 #if LIBMMD_ENABLE_PHYSICS
 void calculateGlobalSubtree(const PmxModel &model, const std::vector<LocalPose> &local, std::vector<GlobalPose> &global,
                             const std::vector<std::vector<std::size_t>> &children, std::size_t root,
-                            std::vector<std::uint8_t> &state, std::vector<std::size_t> &touched) {
+                            std::vector<std::uint8_t> &state, std::vector<std::size_t> &touched,
+                            std::vector<std::size_t> &pending) {
     touched.clear();
-    std::vector<std::size_t> pending{root};
+    pending.clear();
+    pending.push_back(root);
     while (!pending.empty()) {
         const auto index = pending.back();
         pending.pop_back();
@@ -1013,6 +1016,14 @@ struct MmdAnimator::Impl {
     std::unordered_map<std::string_view, BoneTrack> boneTracks;
     std::unordered_map<std::string_view, MorphTrack> morphTracks;
     std::unordered_map<std::uint32_t, BezierLut> bezierLuts;
+    std::vector<BoneTrack *> boneTrackByIndex;
+    std::vector<MorphTrack *> morphTrackByIndex;
+    std::vector<std::pair<std::size_t, const VpdBonePose *>> poseBindings;
+    std::vector<float> morphWeights;
+    std::vector<Float3> impulseLinear, impulseAngular, impulseLinearLocal, impulseAngularLocal;
+    std::vector<bool> impulseReset;
+    std::vector<Float3> animatedBonePositions;
+    std::vector<bool> physicsBones;
     std::vector<std::vector<std::size_t>> boneChildren;
     std::vector<std::vector<std::size_t>> inheritDependents;
     std::vector<std::size_t> parentOrder;
@@ -1035,6 +1046,8 @@ MmdAnimator::MmdAnimator(const PmxModel &model) : model_(model), impl_(std::make
     impl_->requiresCpuVertices =
         !model_.softBodies.empty() ||
         std::ranges::any_of(model_.morphs, [](const auto &morph) { return morph.type >= 3 && morph.type <= 7; });
+    impl_->boneTrackByIndex.resize(model_.bones.size());
+    impl_->morphTrackByIndex.resize(model_.morphs.size());
     impl_->boneOrders = makeBoneOrders(model_);
     impl_->poses.resize(model_.bones.size());
     impl_->localScratch.resize(model_.bones.size());
@@ -1097,6 +1110,8 @@ void MmdAnimator::setMotion(const VmdMotion *motion) {
     impl_->boneTracks.clear();
     impl_->morphTracks.clear();
     impl_->bezierLuts.clear();
+    std::fill(impl_->boneTrackByIndex.begin(), impl_->boneTrackByIndex.end(), nullptr);
+    std::fill(impl_->morphTrackByIndex.begin(), impl_->morphTrackByIndex.end(), nullptr);
     previousFrame_ = -1.0F;
     if (motion_ == nullptr)
         return;
@@ -1125,6 +1140,13 @@ void MmdAnimator::setMotion(const VmdMotion *motion) {
     for (auto &[name, track] : impl_->morphTracks)
         std::ranges::sort(track.keys, {}, &VmdMorphKey::frame);
 
+    for (std::size_t i = 0; i < model_.bones.size(); ++i)
+        if (const auto found = impl_->boneTracks.find(model_.bones[i].name); found != impl_->boneTracks.end())
+            impl_->boneTrackByIndex[i] = &found->second;
+    for (std::size_t i = 0; i < model_.morphs.size(); ++i)
+        if (const auto found = impl_->morphTracks.find(model_.morphs[i].name); found != impl_->morphTracks.end())
+            impl_->morphTrackByIndex[i] = &found->second;
+
     const auto compatibility = motionCompatibility();
     log::info("Motion compatibility: PMX bones=", compatibility.pmxBoneCount,
               ", VMD keys=", compatibility.vmdBoneKeyCount, ", VMD tracks=", compatibility.vmdBoneTrackCount,
@@ -1137,6 +1159,14 @@ void MmdAnimator::setMotion(const VmdMotion *motion) {
 }
 void MmdAnimator::setPose(const VpdPose *pose) {
     pose_ = pose;
+    impl_->poseBindings.clear();
+    if (pose_ != nullptr)
+        for (const auto &value : pose_->bones) {
+            const auto bone = std::find_if(model_.bones.begin(), model_.bones.end(),
+                                           [&](const auto &item) { return item.name == value.name; });
+            if (bone != model_.bones.end())
+                impl_->poseBindings.emplace_back(static_cast<std::size_t>(bone - model_.bones.begin()), &value);
+        }
     previousFrame_ = -1.0F;
 }
 void MmdAnimator::setPhysics(MmdPhysics *physics) {
@@ -1185,10 +1215,21 @@ MotionCompatibility MmdAnimator::motionCompatibility() const {
 
 AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool gpuSkinning, MorphOverrides overrides,
                                          VertexOutput vertexOutput) {
+    AnimatedModelFrame result;
+    evaluateInto(result, frame, deltaSeconds, gpuSkinning, overrides, vertexOutput);
+    return result;
+}
+
+void MmdAnimator::evaluateInto(AnimatedModelFrame &result, float frame, float deltaSeconds, bool gpuSkinning,
+                               MorphOverrides overrides, VertexOutput vertexOutput) {
 #if !LIBMMD_ENABLE_PHYSICS
     static_cast<void>(deltaSeconds);
 #endif
-    AnimatedModelFrame result;
+    result.vertices.clear();
+    result.morphWeights.clear();
+    result.materials.clear();
+    result.bones.clear();
+    result.visible = true;
     IkEvaluationBudget ikBudget{impl_->ikLimits, {}};
     const bool temporaryVertices = std::ranges::any_of(
         overrides, [](const auto &value) { return value.index == MorphOverride::temporary && value.type == 1; });
@@ -1214,34 +1255,33 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
     auto &local = impl_->localScratch;
     std::fill(local.begin(), local.end(), LocalPose{});
     for (std::size_t i = 0; i < model_.bones.size(); ++i) {
-        if (const auto found = impl_->boneTracks.find(model_.bones[i].name); found != impl_->boneTracks.end()) {
-            local[i] = sampleBone(found->second, impl_->bezierLuts, frame,
+        if (auto *track = impl_->boneTrackByIndex[i]; track != nullptr) {
+            local[i] = sampleBone(*track, impl_->bezierLuts, frame,
                                   motion_ == nullptr ? InterpolationMode::bezier : motion_->interpolation);
         }
     }
-    if (pose_ != nullptr) {
-        for (const auto &value : pose_->bones) {
-            const auto bone = std::find_if(model_.bones.begin(), model_.bones.end(),
-                                           [&](const PmxBone &item) { return item.name == value.name; });
-            if (bone != model_.bones.end()) {
-                const auto index = static_cast<std::size_t>(bone - model_.bones.begin());
-                local[index].translation = value.translation;
-                local[index].rotation = value.rotation;
-            }
-        }
+    for (const auto &[index, value] : impl_->poseBindings) {
+        local[index].translation = value->translation;
+        local[index].rotation = value->rotation;
     }
 
-    std::vector<float> morphWeights(model_.morphs.size());
+    auto &morphWeights = impl_->morphWeights;
+    morphWeights.assign(model_.morphs.size(), 0.0F);
     if (gpuSkinning)
         result.morphWeights.assign(model_.morphs.size(), 0.0F);
-    std::vector<Float3> impulseLinear(model_.rigidBodies.size());
-    std::vector<Float3> impulseAngular(model_.rigidBodies.size());
-    std::vector<Float3> impulseLinearLocal(model_.rigidBodies.size());
-    std::vector<Float3> impulseAngularLocal(model_.rigidBodies.size());
-    std::vector<bool> impulseReset(model_.rigidBodies.size());
+    auto &impulseLinear = impl_->impulseLinear;
+    impulseLinear.assign(model_.rigidBodies.size(), Float3{});
+    auto &impulseAngular = impl_->impulseAngular;
+    impulseAngular.assign(model_.rigidBodies.size(), Float3{});
+    auto &impulseLinearLocal = impl_->impulseLinearLocal;
+    impulseLinearLocal.assign(model_.rigidBodies.size(), Float3{});
+    auto &impulseAngularLocal = impl_->impulseAngularLocal;
+    impulseAngularLocal.assign(model_.rigidBodies.size(), Float3{});
+    auto &impulseReset = impl_->impulseReset;
+    impulseReset.assign(model_.rigidBodies.size(), false);
     for (std::size_t i = 0; i < model_.morphs.size(); ++i) {
-        if (const auto found = impl_->morphTracks.find(model_.morphs[i].name); found != impl_->morphTracks.end()) {
-            morphWeights[i] = sampleMorph(found->second, frame);
+        if (auto *track = impl_->morphTrackByIndex[i]; track != nullptr) {
+            morphWeights[i] = sampleMorph(*track, frame);
         }
     }
     for (const auto &override : overrides) {
@@ -1403,10 +1443,12 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
         float physicsDelta = std::max(deltaSeconds, 0.0F);
         if (!discontinuousSeek && previousFrame_ >= 0.0F && frameDelta > 1e-6F)
             physicsDelta = frameDelta / 30.0F;
-        std::vector<Float3> animatedBonePositions(global.size());
+        auto &animatedBonePositions = impl_->animatedBonePositions;
+        animatedBonePositions.resize(global.size());
         for (std::size_t i = 0; i < global.size(); ++i)
             animatedBonePositions[i] = global[i].position;
-        std::vector<bool> physicsBones(model_.bones.size());
+        auto &physicsBones = impl_->physicsBones;
+        physicsBones.assign(model_.bones.size(), false);
         for (std::size_t bodyIndex = 0; bodyIndex < model_.rigidBodies.size(); ++bodyIndex) {
             const auto &body = model_.rigidBodies[bodyIndex];
             if (body.bone < 0 || static_cast<std::size_t>(body.bone) >= global.size())
@@ -1479,7 +1521,7 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
                 local[bone].translation = sub(targetBonePosition, model_.bones[bone].position);
             }
             calculateGlobalSubtree(model_, local, global, impl_->boneChildren, bone, impl_->subtreeState,
-                                   impl_->subtreeScratch);
+                                   impl_->subtreeScratch, impl_->dirtyScratch);
             // The simulated body itself is deliberately left where the
             // solver put it. Forcing it back onto the bone here used to
             // discard the contact/joint solution every frame, letting cloth
@@ -1564,7 +1606,6 @@ AnimatedModelFrame MmdAnimator::evaluate(float frame, float deltaSeconds, bool g
             vertex.normal = normalized(normal);
         }
     }
-    return result;
 }
 
 PreviewNormalization previewNormalization(const PmxModel &model) {
