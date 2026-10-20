@@ -1,9 +1,9 @@
 #pragma once
 
 #define LIBMMD_VERSION_MAJOR 0
-#define LIBMMD_VERSION_MINOR 2
-#define LIBMMD_VERSION_PATCH 7
+#define LIBMMD_VERSION_MINOR 3
+#define LIBMMD_VERSION_PATCH 0
 
 namespace mmd {
-inline constexpr const char *version = "0.2.7";
+inline constexpr const char *version = "0.3.0";
 }
