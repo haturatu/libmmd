@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(libmmd VERSION 0.3.0 LANGUAGES CXX)
+project(libmmd VERSION 0.3.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -189,10 +189,7 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
         libmmd_animation_append_tests
         tests/animation_append_tests.cpp
     )
-    target_link_libraries(
-        libmmd_animation_append_tests
-        PRIVATE mmd::animation
-    )
+    target_link_libraries(libmmd_animation_append_tests PRIVATE mmd::animation)
     libmmd_enable_warnings(libmmd_animation_append_tests)
     add_test(NAME animation_append COMMAND libmmd_animation_append_tests)
     add_executable(
