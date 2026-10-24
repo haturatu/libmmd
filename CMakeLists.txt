@@ -186,6 +186,16 @@ if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
     )
     add_test(NAME animation_hardening COMMAND libmmd_animation_hardening_tests)
     add_executable(
+        libmmd_animation_append_tests
+        tests/animation_append_tests.cpp
+    )
+    target_link_libraries(
+        libmmd_animation_append_tests
+        PRIVATE mmd::animation
+    )
+    libmmd_enable_warnings(libmmd_animation_append_tests)
+    add_test(NAME animation_append COMMAND libmmd_animation_append_tests)
+    add_executable(
         libmmd_document_hardening_tests
         tests/document_hardening_tests.cpp
     )
