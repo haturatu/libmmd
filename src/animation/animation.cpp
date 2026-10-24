@@ -486,11 +486,13 @@ void rebuildBonePoses(const PmxModel &model, const BoneOrder &order, std::vector
                 // Non-local append propagates the parent's append contribution
                 // for multiple-append chains, plus any IK rotation on that
                 // parent. A non-append parent contributes its user/morph pose.
+                // IK is stored as local * inverse(withoutIk), so it must
+                // precede the sampled/append rotation when reconstructing it.
                 appendSource = poses[parent].append;
-                appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+                appendSource.rotation = multiply(poses[parent].ikRotation, appendSource.rotation);
             } else {
                 appendSource = poses[parent].base;
-                appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+                appendSource.rotation = multiply(poses[parent].ikRotation, appendSource.rotation);
             }
             if ((bone.flags & 0x0200U) != 0) {
                 pose.append.translation = mul(appendSource.translation, bone.inheritRatio);
@@ -587,10 +589,10 @@ DirtyRebuildResult rebuildDirtyBonePoses(const PmxModel &model, std::span<const 
                 appendSource = poses[parent].local;
             } else if ((model.bones[parent].flags & 0x0300U) != 0) {
                 appendSource = poses[parent].append;
-                appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+                appendSource.rotation = multiply(poses[parent].ikRotation, appendSource.rotation);
             } else {
                 appendSource = poses[parent].base;
-                appendSource.rotation = multiply(appendSource.rotation, poses[parent].ikRotation);
+                appendSource.rotation = multiply(poses[parent].ikRotation, appendSource.rotation);
             }
             if ((bone.flags & 0x0200U) != 0) {
                 pose.append.translation = mul(appendSource.translation, bone.inheritRatio);
