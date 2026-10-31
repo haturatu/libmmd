@@ -1,81 +1,104 @@
 # libmmd
 
-`libmmd` is a C++20 SDK for PMX models, VMD/VPD motion, MMD animation, and optional physics.
+libmmd は、MikuMikuDance (MMD) の PMX モデル、VMD モーション、VPD ポーズを扱う C++20 ライブラリです。モデルの読み書き、モーション評価、モデル編集、オプションの物理シミュレーションをアプリケーションに組み込めます。
+
+## 主な機能
+
+- PMX モデルとメッシュの読み込み、検証、保存
+- VMD モーションと VPD ポーズの読み込み
+- ボーン、モーフ、IK、スキニングを含むアニメーション評価
+- ハンドルとトランザクションを使った PMX モデル編集
+- Bullet を使った剛体物理と、PMX 2.1 ソフトボディ用のシミュレーション
+
+## 必要な環境
+
+- CMake 3.25 以降
+- C++20 に対応するコンパイラー
+- Windows 以外では Iconv
+- 剛体物理を使う場合は Bullet
+
+Bullet は既定で検出されます。Bullet が見つからない場合も物理モジュールはビルドされますが、`MmdPhysics::available()` は `false` を返します。PMX 2.1 ソフトボディ用シミュレーションは Bullet を必要としません。
+
+## ビルドとインストール
+
+リポジトリのルートで次を実行します。
+
+```sh
+cmake -S . -B build
+cmake --build build
+cmake --install build --prefix "$PWD/install"
+```
+
+Bullet の検出や依存関係の取得は、次の CMake オプションで切り替えられます。
+
+| オプション | 既定値 | 説明 |
+| --- | --- | --- |
+| `LIBMMD_ENABLE_PHYSICS` | `ON` | 物理モジュールをビルドします。`OFF` の場合、`mmd::physics` は生成されません。 |
+| `LIBMMD_ENABLE_BULLET` | `ON` | システムにインストールされた Bullet を検出して使います。 |
+| `LIBMMD_FETCH_DEPENDENCIES` | `OFF` | Bullet が見つからない場合にソースを取得します。これを有効にするときは `LIBMMD_INSTALL=OFF` も指定してください。 |
+
+物理モジュールを含めずにビルドするには、次を実行します。
+
+```sh
+cmake -S . -B build-no-physics -DLIBMMD_ENABLE_PHYSICS=OFF
+cmake --build build-no-physics
+```
+
+## CMake プロジェクトで使う
+
+インストールした libmmd を使うアプリケーションの `CMakeLists.txt` に、次を追加します。
 
 ```cmake
 find_package(libmmd CONFIG REQUIRED)
 target_link_libraries(app PRIVATE mmd::core mmd::animation mmd::physics)
 ```
 
-It is equally usable as a subdirectory. `mmd::core` has no SDL, Vulkan, FFmpeg, or Bullet requirement.
+物理モジュールを無効にしてビルドした場合は、`mmd::physics` をリンク対象から外してください。libmmd のソースをサブディレクトリとして追加する場合も、同じターゲット名を使えます。
 
-For nested physics bones, mode 2 bodies connected by a usable joint to a mode
-1 or mode 2 body on their immediate parent bone use effective mode 1. `bodyMode()` reports this
-runtime mode; the source PMX stays unchanged. Standalone mode 2 bones retain
-animated translation. Bone results are applied in parent order.
+```cmake
+add_subdirectory(external/libmmd)
+target_link_libraries(app PRIVATE mmd::core mmd::animation)
+```
 
-The original constructor retains the default Bullet constraint settings,
-10 solver iterations and a maximum substep of 1/120 second. To opt into the
-MMD 2.75 constraint compatibility preset:
+## PMX とモーションを読み込む
+
+次の例では、PMX モデルと VMD モーションを読み込み、30 フレーム目のモデル状態を評価します。
 
 ```cpp
-mmd::PhysicsSettings settings;
-settings.compatibility = mmd::PhysicsCompatibilityProfile::mmd275Compatible();
-// Optional solver tuning after checking the model with the defaults:
-settings.solverIterations = 25;
-settings.fixedTimeStep = 1.0F / 240.0F;
-mmd::MmdPhysics physics(model, settings);
+#include <mmd/animation.hpp>
+#include <mmd/pmx.hpp>
+#include <mmd/vmd.hpp>
+
+const auto model = mmd::pmx::load("model.pmx");
+const auto motion = mmd::loadVmd("motion.vmd");
+
+mmd::MmdAnimator animator(model);
+animator.setMotion(&motion);
+const auto frame = animator.evaluate(30.0F, 1.0F / 60.0F);
 ```
 
-The preset uses frame offsets disabled, a frame-A linear-constraint lever arm,
-STOP ERP 0.475 on all six axes and solver CFM 0.00001. The lever-arm correction
-is local to libmmd constraints, supports system and fetched Bullet, and follows
-[babylon-mmd's constraint correction](https://github.com/noname0310/babylon-mmd/blob/main/src/Runtime/Optimized/wasm_src/bullet_src/constraint-fix.patch).
-This is a constraint compatibility preset, not a replacement for the entire
-Bullet 2.75 engine. Collision masks and the 0.01 margin remain unchanged.
+`frame` には評価後の頂点、ボーン、マテリアルなどが含まれます。描画やアプリケーション固有の処理は呼び出し側で行います。モデル、モーション、ポーズ、物理ワールドは、アニメーターが参照している間は破棄しないでください。
 
-Settings are validated even without Bullet: iterations must be 1–1000,
-`fixedTimeStep` must be finite and between 1/10000 and 1/4 second, CFM must be
-finite and nonnegative, and STOP ERP must be between 0 and 1. The 2.75 lever-arm
-option requires `useFrameOffset == false`. Invalid settings throw
-`std::invalid_argument`. Existing stepping divides each update into equal
-substeps no larger than `fixedTimeStep`.
+VPD ポーズは `mmd::loadVpd()` で読み込み、`animator.setPose(&pose)` で設定できます。VPD に含まれるボーンのローカル位置と回転が VMD の値を上書きします。`animator.setPose(nullptr)` で上書きを解除できます。
 
-The physics compatibility test can also check a locally supplied Vivian model:
+剛体物理を使う場合は `mmd::MmdPhysics` を作成し、`animator.setPhysics(&physics)` でアニメーターに設定します。Bullet が利用できるかどうかは `physics.available()` で確認できます。
 
-```sh
-build/libmmd_physics_compatibility_tests /path/to/Vivian.pmx
+編集したモデルは `mmd::pmx::save()` で保存できます。
+
+```cpp
+const auto report = mmd::pmx::save("edited.pmx", model);
 ```
 
-It verifies the 150 main skirt boxes, 15 mode 2 roots and 135 effective mode 1
-children, skirt bone/body center agreement and finite mesh positions for 120
-simulation updates with each profile. The model is not included in the repo.
+既定の保存モードは PMX のエンコーディングとインデックス幅を保持し、必要に応じてインデックス幅を広げます。
 
-`MmdAnimator::setPose()` overrides the VMD local translation and rotation of
-bones named in the VPD. Other bone and morph tracks continue to use the motion.
-`setPose(nullptr)` restores the motion, and either change resynchronizes physics.
+## API リファレンス
 
-Document relation edits and global validation share a nonrecursive dependency
-cycle check covering parent and active inheritance edges. Each check is
-O(bones + edges); an incremental editor graph cache is not implemented.
-Transaction patch generation uses handle-table indexes for membership checks.
+- [PMX の読み書きとデータ型](include/mmd/pmx.hpp)
+- [アニメーション評価](include/mmd/animation.hpp)
+- [VMD と VPD](include/mmd/vmd.hpp)
+- [物理シミュレーション](include/mmd/physics.hpp)
+- [トランザクション編集](include/mmd/document.hpp)
 
-Rigid-body property edits, transaction commits and saves share validation of
-shape/mode/group and every floating-point field. Soft-body material, anchor and
-pinned-vertex references use the same checks in all three paths. Optional
-material and anchor rigid-body references retain the editor's `-1` convention;
-anchor and pinned vertices must be valid vertex indices.
+## ライセンス
 
-Serialization validation also rejects unknown text encodings, index widths
-outside 1/2/4 and unknown vertex weight types. Joint types follow the PMX
-version (2.0: 0; 2.1: 0–5), and all joint float arrays must be finite. Soft bodies
-validate shape 0/1, group 0–15, aero model 0–4 and every float field/array.
-
-`pmx::save()` writes into a private staging directory beside the destination,
-checks flush and close, then replaces the destination with the complete file.
-Validation, serialization and I/O failures before replacement leave the old
-file intact; staging files are cleaned up on exceptions. POSIX mode bits are
-preserved when replacing an existing regular file. Replacement uses same-volume
-rename on POSIX and `MoveFileExW` on Windows, without a delete/copy fallback.
-Flush/close is not a guarantee of persistence through a power failure; file and
-directory fsync are not performed.
+libmmd は [MIT License](LICENSE) で提供されます。第三者コードに関する情報は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
