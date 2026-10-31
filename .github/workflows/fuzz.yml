@@ -38,8 +38,6 @@ jobs:
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
-              - '.clang-format'
-              - '.clang-tidy'
               - '.github/workflows/fuzz.yml'
   pmx-parser:
     needs: changes
