@@ -38,8 +38,6 @@ jobs:
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
-              - '.clang-format'
-              - '.clang-tidy'
               - '.github/workflows/sanitizer.yml'
   asan-ubsan:
     needs: changes
