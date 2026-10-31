@@ -39,8 +39,6 @@ jobs:
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
-              - '.clang-format'
-              - '.clang-tidy'
               - '.github/workflows/ci.yml'
   build:
     needs: changes
