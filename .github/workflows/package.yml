@@ -16,7 +16,33 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect affected source files
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        if: (github.event_name == 'push' && github.ref_type != 'tag') || github.event_name == 'pull_request'
+        with:
+          base: ${{ github.ref }}
+          filters: |
+            code:
+              - 'src/**'
+              - 'include/**'
+              - 'tests/**'
+              - 'cmake/**'
+              - 'CMakeLists.txt'
+              - 'CMakePresets.json'
+              - '.github/workflows/package.yml'
   installed-consumer:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.ref_type == 'tag' || needs.changes.outputs.code == 'true'
     name: Package / installed consumer / ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -72,6 +98,8 @@ jobs:
           ctest --test-dir build-consumer --output-on-failure --parallel 2
 
   subproject-consumer:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.ref_type == 'tag' || needs.changes.outputs.code == 'true'
     name: Package / FetchContent consumer
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -94,6 +122,8 @@ jobs:
           ctest --test-dir build-subproject --output-on-failure --parallel 2
 
   bullet-dependency-modes:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.ref_type == 'tag' || needs.changes.outputs.code == 'true'
     name: Package / Bullet dependency modes
     runs-on: ubuntu-24.04
     timeout-minutes: 25
