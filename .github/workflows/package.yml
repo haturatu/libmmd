@@ -43,7 +43,7 @@ jobs:
   installed-consumer:
     needs: changes
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.ref_type == 'tag' || needs.changes.outputs.code == 'true'
-    name: Package / installed consumer / ${{ matrix.name }}
+    name: Package / installed consumer / ${{ matrix.name }} / shared=${{ matrix.shared }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -54,14 +54,33 @@ jobs:
             physics: ON
             bullet: ON
             consumer_physics: ON
+            shared: OFF
           - name: no-bullet
             physics: ON
             bullet: OFF
             consumer_physics: ON
+            shared: OFF
           - name: no-physics
             physics: OFF
             bullet: OFF
             consumer_physics: OFF
+            shared: OFF
+
+          - name: system-bullet
+            physics: ON
+            bullet: ON
+            consumer_physics: ON
+            shared: ON
+          - name: no-bullet
+            physics: ON
+            bullet: OFF
+            consumer_physics: ON
+            shared: ON
+          - name: no-physics
+            physics: OFF
+            bullet: OFF
+            consumer_physics: OFF
+            shared: ON
 
     steps:
       - name: Checkout
@@ -77,11 +96,13 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS="${{ matrix.shared }}" \
             -DLIBMMD_BUILD_TESTS=ON \
             -DLIBMMD_INSTALL=ON \
             -DLIBMMD_ENABLE_PHYSICS="${{ matrix.physics }}" \
             -DLIBMMD_ENABLE_BULLET="${{ matrix.bullet }}"
           cmake --build build --parallel
+          ctest --test-dir build --output-on-failure --parallel 2
           cmake --install build --prefix "$GITHUB_WORKSPACE/install"
 
       - name: Configure installed consumer
@@ -90,12 +111,19 @@ jobs:
           cmake -S tests/package-consumer -B build-consumer -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/install" \
-            -DLIBMMD_CONSUMER_WITH_PHYSICS="${{ matrix.consumer_physics }}"
+            -DLIBMMD_CONSUMER_WITH_PHYSICS="${{ matrix.consumer_physics }}" \
+            -DLIBMMD_CONSUMER_WITH_BULLET="${{ matrix.bullet }}"
 
       - name: Build and test installed consumer
         run: |
           cmake --build build-consumer --parallel
           ctest --test-dir build-consumer --output-on-failure --parallel 2
+
+      - name: Verify component availability and safe fallback
+        run: >-
+          cmake -S tests/package-components -B build-components -G Ninja
+          -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/install"
+          -DLIBMMD_EXPECT_BULLET="${{ matrix.bullet }}"
 
   subproject-consumer:
     needs: changes

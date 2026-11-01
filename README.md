@@ -33,6 +33,7 @@ Bullet の検出や依存関係の取得は、次の CMake オプションで切
 
 | オプション | 既定値 | 説明 |
 | --- | --- | --- |
+| `BUILD_SHARED_LIBS` | `OFF` | `ON` で共有ライブラリをビルドします。AUR パッケージは `ON` でビルドします。 |
 | `LIBMMD_ENABLE_PHYSICS` | `ON` | 物理モジュールをビルドします。`OFF` の場合、`mmd::physics` は生成されません。 |
 | `LIBMMD_ENABLE_BULLET` | `ON` | システムにインストールされた Bullet を検出して使います。 |
 | `LIBMMD_FETCH_DEPENDENCIES` | `OFF` | Bullet が見つからない場合にソースを取得します。これを有効にするときは `LIBMMD_INSTALL=OFF` も指定してください。 |
@@ -44,14 +45,30 @@ cmake -S . -B build-no-physics -DLIBMMD_ENABLE_PHYSICS=OFF
 cmake --build build-no-physics
 ```
 
+## AUR からインストールする
+
+Arch Linux と Artix Linux では、次を実行します。
+
+```sh
+yay -S libmmd
+```
+
+パッケージは GitHub Release のソースから、システムの Bullet を使って共有ライブラリをビルドします。更新レシピは [aur-packages](https://github.com/haturatu/aur-packages) で管理します。ヘッダー、共有ライブラリ、CMake パッケージ、ライセンスは `/usr` 以下にインストールされます。
+
+### ABI とバージョン
+
+0.x 系では、互換性を壊す API・ABI の変更時にマイナーバージョンを上げます。0.3 系の SONAME は `libmmd_core.so.0.3`、`libmmd_animation.so.0.3`、`libmmd_physics.so.0.3` です。パッチリリースでは ABI 互換性を維持します。マイナーバージョンを上げた場合は、利用するアプリケーションも再ビルドしてください。CMake のバージョン判定も同じマイナーバージョン内に制限しています。
+
 ## CMake プロジェクトで使う
 
 インストールした libmmd を使うアプリケーションの `CMakeLists.txt` に、次を追加します。
 
 ```cmake
-find_package(libmmd CONFIG REQUIRED)
+find_package(libmmd 0.3.2 CONFIG REQUIRED COMPONENTS core animation physics)
 target_link_libraries(app PRIVATE mmd::core mmd::animation mmd::physics)
 ```
+
+`core`、`animation`、`physics`、`bullet` をコンポーネントとして指定できます。`bullet` は Bullet バックエンドを必須にします。インストール時の機能は `libmmd_WITH_PHYSICS` と `libmmd_HAS_BULLET` で確認できます。
 
 物理モジュールを無効にしてビルドした場合は、`mmd::physics` をリンク対象から外してください。libmmd のソースをサブディレクトリとして追加する場合も、同じターゲット名を使えます。
 
