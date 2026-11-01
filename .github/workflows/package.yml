@@ -115,6 +115,9 @@ jobs:
             -DLIBMMD_CONSUMER_WITH_BULLET="${{ matrix.bullet }}"
 
       - name: Build and test installed consumer
+        # The staging prefix is outside the dynamic linker's system paths.
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
         run: |
           cmake --build build-consumer --parallel
           ctest --test-dir build-consumer --output-on-failure --parallel 2
