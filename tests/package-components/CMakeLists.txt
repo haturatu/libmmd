@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.25)
+project(libmmd_component_consumer LANGUAGES CXX)
+
+find_package(libmmd 0.3.2 CONFIG QUIET COMPONENTS physics bullet)
+if(LIBMMD_EXPECT_BULLET)
+    if(NOT libmmd_FOUND OR NOT TARGET mmd::physics OR NOT libmmd_HAS_BULLET)
+        message(FATAL_ERROR "The installed Bullet backend was not exported")
+    endif()
+else()
+    if(libmmd_FOUND OR TARGET mmd::core OR TARGET mmd::physics)
+        message(FATAL_ERROR "Unavailable components must not import targets")
+    endif()
+endif()

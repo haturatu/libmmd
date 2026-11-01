@@ -8,6 +8,11 @@ int main() {
     mmd::PmxModel model;
 #if LIBMMD_CONSUMER_WITH_PHYSICS
     mmd::MmdPhysics physics(model);
+#if LIBMMD_CONSUMER_WITH_BULLET
+    if (!physics.available()) {
+        return 1;
+    }
+#endif
     static_cast<void>(physics);
 #endif
     mmd::MmdAnimator animator(model);

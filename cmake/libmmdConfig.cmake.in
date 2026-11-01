@@ -2,6 +2,24 @@
 
 include(CMakeFindDependencyMacro)
 
+set(libmmd_VERSION "@PROJECT_VERSION@")
+set(libmmd_WITH_PHYSICS @LIBMMD_ENABLE_PHYSICS@)
+set(libmmd_HAS_BULLET @LIBMMD_HAS_BULLET@)
+set(libmmd_core_FOUND TRUE)
+set(libmmd_animation_FOUND TRUE)
+set(libmmd_physics_FOUND ${libmmd_WITH_PHYSICS})
+set(libmmd_bullet_FOUND ${libmmd_HAS_BULLET})
+set(libmmd_FOUND TRUE)
+# Reject unavailable components before importing targets, so AUTO consumers
+# can safely fall back to a bundled build.
+check_required_components(libmmd)
+if(NOT libmmd_FOUND)
+    set(libmmd_NOT_FOUND_MESSAGE
+        "libmmd lacks one or more requested components: ${libmmd_FIND_COMPONENTS}"
+    )
+    return()
+endif()
+
 if(NOT WIN32)
     find_dependency(Iconv)
 endif()

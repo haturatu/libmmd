@@ -1,10 +1,16 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(libmmd VERSION 0.3.1 LANGUAGES CXX)
+project(libmmd VERSION 0.3.2 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(CTest)
+
+option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+# Until 1.0, incompatible API/ABI changes increment the minor version.
+set(LIBMMD_SOVERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
+set(LIBMMD_HAS_BULLET 0)
+set(LIBMMD_CONFIG_NEEDS_BULLET OFF)
 
 option(LIBMMD_ENABLE_PHYSICS "Build the optional MMD physics module" ON)
 option(
@@ -157,6 +163,18 @@ if(LIBMMD_ENABLE_PHYSICS)
     target_link_libraries(mmd_animation PRIVATE mmd_physics)
 endif()
 
+foreach(target IN ITEMS mmd_core mmd_animation mmd_physics)
+    if(TARGET ${target})
+        set_target_properties(
+            ${target}
+            PROPERTIES
+                VERSION ${PROJECT_VERSION}
+                SOVERSION ${LIBMMD_SOVERSION}
+                WINDOWS_EXPORT_ALL_SYMBOLS ON
+        )
+    endif()
+endforeach()
+
 if(BUILD_TESTING AND LIBMMD_BUILD_TESTS)
     add_executable(libmmd_pmx_roundtrip_tests tests/pmx_roundtrip_tests.cpp)
     target_link_libraries(libmmd_pmx_roundtrip_tests PRIVATE mmd::core)
@@ -294,12 +312,16 @@ if(LIBMMD_INSTALL)
         TARGETS mmd_core mmd_animation
         EXPORT libmmdTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
     if(TARGET mmd_physics)
         install(
             TARGETS mmd_physics
             EXPORT libmmdTargets
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
     endif()
     install(
@@ -315,12 +337,16 @@ if(LIBMMD_INSTALL)
     write_basic_package_version_file(
         ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfigVersion.cmake
         VERSION ${PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion
+        COMPATIBILITY SameMinorVersion
     )
     install(
         FILES
             ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfig.cmake
             ${CMAKE_CURRENT_BINARY_DIR}/libmmdConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmmd
+    )
+    install(
+        FILES LICENSE THIRD_PARTY_NOTICES.md
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/libmmd
     )
 endif()
