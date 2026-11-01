@@ -50,10 +50,10 @@ cmake --build build-no-physics
 Arch Linux と Artix Linux では、次を実行します。
 
 ```sh
-yay -S libmmd
+yay -S libmmd-cpp
 ```
 
-パッケージは GitHub Release のソースから、システムの Bullet を使って共有ライブラリをビルドします。更新レシピは [aur-packages](https://github.com/haturatu/aur-packages) で管理します。ヘッダー、共有ライブラリ、CMake パッケージ、ライセンスは `/usr` 以下にインストールされます。
+AUR のパッケージ名は `libmmd-cpp` です。`libmmd` は別プロジェクトが使用していた名前のため、この名前で公開しています。パッケージは GitHub Release のソースから、システムの Bullet を使って共有ライブラリをビルドします。更新レシピは [aur-packages](https://github.com/haturatu/aur-packages) で管理します。ヘッダー、共有ライブラリ、CMake パッケージ、ライセンスは `/usr` 以下にインストールされます。
 
 ### ABI とバージョン
 
